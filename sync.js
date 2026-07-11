@@ -1,1 +1,122 @@
-const SEED = {"categorias":[{"id":1,"nome":"🏠Gastos Fixos","ativa":true},{"id":2,"nome":"💸Gastos Variáveis","ativa":true},{"id":3,"nome":"🧾Despesas Temporárias","ativa":true},{"id":4,"nome":"📺Assinatura","ativa":true},{"id":5,"nome":"💰Investimento","ativa":true},{"id":6,"nome":"💳Pagamento de Fatura","ativa":true},{"id":7,"nome":"💵Ganhos","ativa":true}],"subcategorias":[{"id":102,"categoriaId":1,"nome":"🚗Pedágio sem parar","ativa":true},{"id":103,"categoriaId":1,"nome":"🎗Seguro de vida","ativa":true},{"id":104,"categoriaId":1,"nome":"🏠Aluguel","ativa":true},{"id":203,"categoriaId":1,"nome":"💊Plano de Saúde","ativa":true},{"id":204,"categoriaId":1,"nome":"💡Energia","ativa":true},{"id":205,"categoriaId":1,"nome":"💧Água","ativa":true},{"id":729,"categoriaId":1,"nome":"Supermercado","ativa":true},{"id":734,"categoriaId":1,"nome":"Açougue","ativa":true},{"id":712,"categoriaId":5,"nome":"🏛DinDin","ativa":true},{"id":713,"categoriaId":5,"nome":"🏛Renda Fixa","ativa":true},{"id":714,"categoriaId":5,"nome":"🏛Renda Variável","ativa":true},{"id":716,"categoriaId":5,"nome":"🏦Bolsa de valores","ativa":true},{"id":717,"categoriaId":5,"nome":"🏦Consórcio","ativa":true},{"id":718,"categoriaId":6,"nome":"💳Banco do Brasil","ativa":true},{"id":719,"categoriaId":6,"nome":"💳Elo mais","ativa":true},{"id":720,"categoriaId":7,"nome":"Outros","ativa":true},{"id":721,"categoriaId":7,"nome":"💰13º Salário","ativa":true},{"id":722,"categoriaId":7,"nome":"💲Férias","ativa":true},{"id":723,"categoriaId":7,"nome":"💲Saldo","ativa":true},{"id":724,"categoriaId":7,"nome":"💵PPR","ativa":true},{"id":725,"categoriaId":7,"nome":"💵Vale","ativa":true},{"id":726,"categoriaId":7,"nome":"💸Salário","ativa":true},{"id":735,"categoriaId":7,"nome":"💸Investimento","ativa":true},{"id":210,"categoriaId":2,"nome":"💸Anuidade de cartão","ativa":true},{"id":301,"categoriaId":2,"nome":"Pedágio sem parar","ativa":true},{"id":304,"categoriaId":2,"nome":"👨Corte de cabelo","ativa":true},{"id":401,"categoriaId":2,"nome":"💊Farmácia","ativa":true},{"id":502,"categoriaId":2,"nome":"💰Tarifa de pacote de serviços","ativa":true},{"id":503,"categoriaId":2,"nome":"📖Escola","ativa":true},{"id":504,"categoriaId":2,"nome":"📱Celular","ativa":true},{"id":505,"categoriaId":2,"nome":"🖱Internet","ativa":true},{"id":727,"categoriaId":2,"nome":"Gympass","ativa":true},{"id":728,"categoriaId":2,"nome":"Abastecimento veícular","ativa":true},{"id":730,"categoriaId":2,"nome":"Lanche","ativa":true},{"id":733,"categoriaId":2,"nome":"Gás de cosinha","ativa":true},{"id":506,"categoriaId":2,"nome":"Lazer","ativa":true},{"id":711,"categoriaId":4,"nome":"📺Netflix","ativa":true},{"id":601,"categoriaId":3,"nome":"🚗Anuidade BB","ativa":true},{"id":701,"categoriaId":3,"nome":"Desenvolvimento pessoal","ativa":true},{"id":702,"categoriaId":3,"nome":"Imposto de renda","ativa":true},{"id":703,"categoriaId":3,"nome":"Juros bancários","ativa":true},{"id":704,"categoriaId":3,"nome":"Loteria","ativa":true},{"id":705,"categoriaId":3,"nome":"🏦Mobília casa","ativa":true},{"id":707,"categoriaId":3,"nome":"💵Outros","ativa":true},{"id":708,"categoriaId":3,"nome":"📖Desenvolvimento pessoal","ativa":true},{"id":709,"categoriaId":3,"nome":"🚍IPVA","ativa":true},{"id":710,"categoriaId":3,"nome":"🚗Seguro auto","ativa":true},{"id":731,"categoriaId":3,"nome":"Vestuário","ativa":true},{"id":732,"categoriaId":3,"nome":"Férias","ativa":true},{"id":740,"categoriaId":3,"nome":"🚗Manutenção veicular","ativa":true},{"id":741,"categoriaId":3,"nome":"🚗Limpezaveicular","ativa":true}],"carteiras":[],"lancamentos":[],"orcamentos":[],"parcelas":[]};
+// Módulo de sincronização entre aparelhos — usa a File System Access API do
+// navegador para ler/escrever um arquivo DENTRO da pasta que o OneDrive já
+// sincroniza. Não usa nenhum servidor, nenhuma conta na nuvem nova, nenhuma
+// senha de terceiros: o OneDrive já faz o trabalho de levar o arquivo entre
+// os aparelhos, do jeito que já faz com qualquer outro arquivo seu.
+//
+// O conteúdo escrito é sempre o mesmo formato do backup criptografado — nada
+// muda na segurança: quem abrir o arquivo sem o PIN não lê nada.
+const AppSync = (function () {
+  const DB_NAME = 'orcamento_familiar_sync_db';
+  const STORE = 'handles';
+  const KEY = 'sync_handle_v1';
+
+  function supported() {
+    return typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
+  }
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function getHandle() {
+    try {
+      const db = await openDB();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readonly');
+        const req = tx.objectStore(STORE).get(KEY);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) { return null; }
+  }
+
+  async function setHandle(handle) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(handle, KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function clearHandle() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function ensurePermission(handle) {
+    const opts = { mode: 'readwrite' };
+    if ((await handle.queryPermission(opts)) === 'granted') return true;
+    if ((await handle.requestPermission(opts)) === 'granted') return true;
+    return false;
+  }
+
+  async function pickNewFile() {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: 'dados-sincronizados.kfsync',
+      types: [{ description: 'Dados sincronizados do app', accept: { 'application/json': ['.kfsync'] } }],
+    });
+    await setHandle(handle);
+    return handle;
+  }
+
+  async function pickExistingFile() {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'Dados sincronizados do app', accept: { 'application/json': ['.kfsync'] } }],
+    });
+    await setHandle(handle);
+    return handle;
+  }
+
+  async function write(rawObj) {
+    const handle = await getHandle();
+    if (!handle) return false;
+    if (!(await ensurePermission(handle))) return false;
+    const writable = await handle.createWritable();
+    await writable.write(JSON.stringify(rawObj));
+    await writable.close();
+    return true;
+  }
+
+  async function read() {
+    const handle = await getHandle();
+    if (!handle) return null;
+    if (!(await ensurePermission(handle))) return null;
+    const file = await handle.getFile();
+    const text = await file.text();
+    if (!text) return null;
+    try { return JSON.parse(text); } catch (e) { return null; }
+  }
+
+  async function readFromHandle(handle) {
+    if (!(await ensurePermission(handle))) throw new Error('Permissão negada para ler o arquivo.');
+    const file = await handle.getFile();
+    const text = await file.text();
+    if (!text) return null;
+    return JSON.parse(text);
+  }
+
+  async function isEnabled() { return !!(await getHandle()); }
+  async function disable() { await clearHandle(); }
+  async function nomeArquivo() {
+    const h = await getHandle();
+    return h ? h.name : null;
+  }
+
+  return { supported, pickNewFile, pickExistingFile, write, read, readFromHandle, isEnabled, disable, nomeArquivo };
+})();
