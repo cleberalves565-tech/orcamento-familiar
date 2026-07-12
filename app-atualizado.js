@@ -16,6 +16,12 @@ function fmtData(iso) {
 function uuid() {
   return 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
+const MAX_PARCELAS = 18;
+function parcelaOptionsHtml() {
+  let html = '<option value="1">À vista (1x)</option>';
+  for (let n = 2; n <= MAX_PARCELAS; n++) html += `<option value="${n}">${n}x</option>`;
+  return html;
+}
 
 let STATE = null;
 let VIEW = { ano: 2026, mes: 7 };
@@ -280,8 +286,17 @@ const Auth = {
   iniciarSincronizacaoExistenteManual() {
     // Fallback universal (celular, Safari, qualquer navegador sem File System Access API):
     // usa um seletor de arquivo comum em vez do recurso exclusivo de Chrome/Edge no computador.
-    const input = document.createElement('input');
+    // IMPORTANTE: o <input> precisa estar de fato no documento (mesmo que invisível) antes do
+    // .click() — em alguns navegadores de celular (principalmente Safari/iOS), chamar .click()
+    // num elemento criado em memória mas nunca inserido na página não abre o seletor de arquivos
+    // de forma confiável. Por isso ele é anexado ao <body> e removido logo depois de usado —
+    // igual ao input oculto já usado com sucesso em Configurações → "Sincronizar agora".
+    let input = document.getElementById('fileOnboardingSync');
+    if (input) input.remove();
+    input = document.createElement('input');
     input.type = 'file';
+    input.id = 'fileOnboardingSync';
+    input.style.display = 'none';
     // Sem "accept" restritivo: alguns apps de arquivos (ex.: OneDrive no celular)
     // nao reconhecem a extensao .kfsync e desabilitam o arquivo na selecao se
     // houver filtro. O conteudo e validado depois de escolhido, entao aceitar
@@ -297,8 +312,11 @@ const Auth = {
         this.renderSyncPinEntry();
       } catch (e) {
         alert('Não foi possível ler esse arquivo: ' + e.message);
+      } finally {
+        input.remove();
       }
     };
+    document.body.appendChild(input);
     input.click();
   },
   renderSyncPinEntry() {
@@ -408,13 +426,51 @@ function contaOuCartaoNome(id) {
 function lancamentosDoMes(ano, mes) {
   return STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m === mes; });
 }
+
+// ---------------- "Itens" — a mesma despesa vista pelo regime de caixa/competência de parcela ----------------
+// Uma compra à vista/débito/PIX conta no mês em que foi feita (igual antes).
+// Uma compra no CARTÃO DE CRÉDITO passa a contar no(s) mês(es) em que cada parcela VENCE — a mesma lógica que
+// já era usada só na tela de Cartões (fatura) e em Orçamentos (calcularOrcadoRealizado) — em vez de jogar o
+// valor total no mês da compra. Isso reflete melhor "o que realmente compromete sua conta em cada mês".
+function itensTodoPeriodo() {
+  const itens = [];
+  STATE.lancamentos.forEach(l => {
+    if (l.formaPagamento === 'Cartão de Crédito') return; // representado pelas parcelas, abaixo
+    itens.push({
+      id: l.id, lancamentoId: l.id, tipo: l.tipo, data: l.data,
+      categoriaId: l.categoriaId, subcategoriaId: l.subcategoriaId, descricao: l.descricao,
+      valor: l.valor, formaPagamento: l.formaPagamento, carteiraId: l.carteiraId,
+      isParcela: false, numero: null, qtd: null,
+      transferencia: AppLogic.isTransferenciaFatura(l),
+    });
+  });
+  STATE.parcelas.forEach(p => {
+    if (p.ano == null || p.mes == null) return;
+    const l = STATE.lancamentos.find(x => x.id === p.lancamentoId);
+    if (!l) return; // parcela órfã — não deveria acontecer, mas protege contra dado inconsistente
+    const cartao = STATE.cartoes.find(c => c.id === p.carteiraId);
+    const dia = cartao ? Math.min(cartao.diaVencimento, 28) : 1;
+    const dataSint = p.ano + '-' + String(p.mes).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
+    itens.push({
+      id: p.id, lancamentoId: l.id, tipo: l.tipo, data: dataSint,
+      categoriaId: p.categoriaId, subcategoriaId: p.subcategoriaId, descricao: l.descricao,
+      valor: p.valor, formaPagamento: 'Cartão de Crédito', carteiraId: p.carteiraId,
+      isParcela: true, numero: p.numero, qtd: p.qtd,
+      transferencia: false,
+    });
+  });
+  return itens;
+}
+function itensDoMes(ano, mes) {
+  return itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m === mes; });
+}
 function totalReceitasMes(ano, mes) {
-  return AppLogic.reais(lancamentosDoMes(ano, mes).filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+  return AppLogic.reais(itensDoMes(ano, mes).filter(i => i.tipo === 'Receita').reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalDespesasMes(ano, mes) {
-  return AppLogic.reais(lancamentosDoMes(ano, mes)
-    .filter(l => l.tipo === 'Despesa' && !AppLogic.isTransferenciaFatura(l))
-    .reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+  return AppLogic.reais(itensDoMes(ano, mes)
+    .filter(i => i.tipo === 'Despesa' && !i.transferencia)
+    .reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function saldoTotalContas() {
   return AppLogic.reais(STATE.contas.reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0)), 0));
@@ -432,21 +488,25 @@ function mesNavHtml() {
 
 function mesesComMovimento() {
   const set = new Set();
-  STATE.lancamentos.forEach(l => { const [y, m] = l.data.split('-').map(Number); set.add(y + '-' + String(m).padStart(2, '0')); });
+  STATE.lancamentos.forEach(l => {
+    if (l.formaPagamento === 'Cartão de Crédito') return; // representado pelas parcelas, abaixo
+    const [y, m] = l.data.split('-').map(Number); set.add(y + '-' + String(m).padStart(2, '0'));
+  });
+  STATE.parcelas.forEach(p => { if (p.ano != null && p.mes != null) set.add(p.ano + '-' + String(p.mes).padStart(2, '0')); });
   return Array.from(set).sort();
 }
 
 function totalReceitasAcumuladoAno(ano, ateMes) {
-  return AppLogic.reais(STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m <= ateMes && l.tipo === 'Receita'; }).reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+  return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Receita'; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalDespesasAcumuladoAno(ano, ateMes) {
-  return AppLogic.reais(STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m <= ateMes && l.tipo === 'Despesa' && !AppLogic.isTransferenciaFatura(l); }).reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+  return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Despesa' && !i.transferencia; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalReceitasTodoPeriodo() {
-  return AppLogic.reais(STATE.lancamentos.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+  return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Receita').reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalDespesasTodoPeriodo() {
-  return AppLogic.reais(STATE.lancamentos.filter(l => l.tipo === 'Despesa' && !AppLogic.isTransferenciaFatura(l)).reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+  return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Despesa' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 
 function totalParcelasPorMes() {
@@ -460,6 +520,39 @@ function totalParcelasPorMes() {
     const [y, m] = chave.split('-').map(Number);
     return { ano: y, mes: m, valor: AppLogic.reais(cents) };
   });
+}
+
+// ---------------- Conferência: pago x fatura, por cartão ----------------
+// Descobre a qual cartão um lançamento "💳Pagamento de Fatura" se refere. Lançamentos novos guardam isso
+// explicitamente (cartaoFaturaId, escolhido no formulário). Lançamentos antigos (importados da planilha) não
+// tinham esse campo — para eles, tentamos casar pelo nome da subcategoria (ex.: "💳Banco do Brasil") com o
+// nome do cartão cadastrado, como uma segunda tentativa razoável.
+function normalizaNome(s) { return String(s || '').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase(); }
+function resolverCartaoDaFatura(l) {
+  if (l.cartaoFaturaId != null) {
+    const c = STATE.cartoes.find(c => c.id === l.cartaoFaturaId);
+    if (c) return c;
+  }
+  const sub = STATE.subcategorias.find(s => s.id === l.subcategoriaId);
+  if (sub) {
+    const nomeSub = normalizaNome(sub.nome);
+    const achou = STATE.cartoes.find(c => {
+      const nomeCartao = normalizaNome(c.nome);
+      return nomeCartao && (nomeSub.includes(nomeCartao) || nomeCartao.includes(nomeSub));
+    });
+    if (achou) return achou;
+  }
+  return null;
+}
+// Pago no MESMO mês de competência da fatura — uma compra até o dia do fechamento já "pertence" ao
+// mês do vencimento (ex.: compra em 24/06 com fechamento dia 24 vira parcela de competência julho,
+// junto com o pagamento da fatura feito em 05/07). Por isso a comparação certa é mês a mês, sem deslocar.
+function totalPagoFaturaCartaoMes(cartaoId, ano, mes) {
+  return AppLogic.reais(STATE.lancamentos
+    .filter(l => l.categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA)
+    .filter(l => { const c = resolverCartaoDaFatura(l); return c && c.id === cartaoId; })
+    .filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m === mes; })
+    .reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
 }
 
 
@@ -478,8 +571,8 @@ const Render = {
     const economiaPct = receitas > 0 ? Math.round(((receitas - despesas) / receitas) * 100) : 0;
     const ultimos = STATE.lancamentos.slice().sort((a, b) => b.data.localeCompare(a.data)).slice(0, 6);
     const porCategoria = {};
-    lancamentosDoMes(ano, mes).filter(l => l.tipo === 'Despesa' && !AppLogic.isTransferenciaFatura(l)).forEach(l => {
-      porCategoria[l.categoriaId] = (porCategoria[l.categoriaId] || 0) + AppLogic.centavos(l.valor);
+    itensDoMes(ano, mes).filter(i => i.tipo === 'Despesa' && !i.transferencia).forEach(i => {
+      porCategoria[i.categoriaId] = (porCategoria[i.categoriaId] || 0) + AppLogic.centavos(i.valor);
     });
     const catRows = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]).map(([cid, cents]) => {
       const pct = despesas > 0 ? Math.round((cents / AppLogic.centavos(despesas)) * 100) : 0;
@@ -494,12 +587,12 @@ const Render = {
         <div class="card"><div class="stat-label">Despesas do mês</div><div class="stat-value down">${fmtMoeda(despesas)}</div></div>
         <div class="card"><div class="stat-label">Economia do mês</div><div class="stat-value" style="color:var(--accent2)">${economiaPct}%</div></div>
       </div>
-      <div class="logic-note"><span>ℹ️</span><div>Pagamentos de fatura não entram nas despesas acima — já é representado pelas compras originais que compõem a fatura.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Compras no cartão de crédito entram aqui pelo mês em que a <b>parcela vence</b> (não pelo mês da compra) — assim o valor se aproxima do que realmente compromete sua conta em cada mês. Pagamentos de fatura em si não entram nas despesas, para não contar a mesma compra duas vezes.</div></div>
       <div class="section-title">Gastos por categoria (${MESES_NOMES[mes]})</div>
       <div class="card"><div class="legend">${catRows || '<div class="stat-sub">Sem despesas neste mês.</div>'}</div></div>
       <div class="section-title">Últimos lançamentos</div>
       <div class="card">${ultimos.map(l => `
-        <div class="row"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}</div><div class="row-sub">${fmtData(l.data)} · ${categoriaNome(l.categoriaId)}</div></div></div>
+        <div class="row" style="cursor:pointer;" onclick="Modals.openEditarTransacao('${l.id}')"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}</div><div class="row-sub">${fmtData(l.data)} · ${categoriaNome(l.categoriaId)}</div></div></div>
         <div class="row-value ${l.tipo === 'Receita' ? 'up' : 'down'}">${l.tipo === 'Receita' ? '+' : '-'}${fmtMoeda(l.valor)}</div></div>`).join('') || '<div class="stat-sub">Nenhum lançamento ainda.</div>'}
       </div>
       <div class="fab"><button class="fab-btn" onclick="Modals.openNovaTransacao()">+ Nova transação</button></div>`;
@@ -508,19 +601,20 @@ const Render = {
   render_transacoes() {
     const el = document.getElementById('screen-transacoes');
     const { ano, mes } = VIEW;
-    const lista = lancamentosDoMes(ano, mes).sort((a, b) => b.data.localeCompare(a.data));
+    const lista = itensDoMes(ano, mes).sort((a, b) => b.data.localeCompare(a.data));
     const receitas = totalReceitasMes(ano, mes), despesas = totalDespesasMes(ano, mes);
     el.innerHTML = `
       <div class="topbar"><h1>Transações</h1>${mesNavHtml()}</div>
       <div class="field-row" style="margin-bottom:16px;">
         <div class="field"><input id="buscaTransacao" placeholder="Buscar por descrição..." oninput="Render.render_transacoes()"></div>
       </div>
+      <div class="logic-note"><span>✏️</span><div>Clique em um lançamento na lista abaixo para corrigir ou excluir (útil quando duplicar por engano). Compras no cartão aparecem pelo mês em que cada <b>parcela vence</b>, já com o valor daquela parcela — não o valor total da compra.</div></div>
       <div class="card">${lista.filter(l => {
         const termo = (document.getElementById('buscaTransacao') && document.getElementById('buscaTransacao').value || '').toLowerCase();
         return !termo || l.descricao.toLowerCase().includes(termo);
       }).map(l => {
-        const transferencia = AppLogic.isTransferenciaFatura(l);
-        return `<div class="row"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}${l.qtdParcelas > 1 ? ' (parcela ' + l.parcelaAtual + '/' + l.qtdParcelas + ')' : ''}</div><div class="row-sub">${fmtData(l.data)} · ${transferencia ? 'Transferência (não é despesa nova)' : categoriaNome(l.categoriaId) + ' · ' + contaOuCartaoNome(l.carteiraId)}</div></div></div>
+        const transferencia = l.transferencia;
+        return `<div class="row" style="cursor:pointer;" onclick="Modals.openEditarTransacao('${l.lancamentoId}')"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}${l.isParcela && l.qtd > 1 ? ' (parcela ' + l.numero + '/' + l.qtd + ')' : ''}</div><div class="row-sub">${fmtData(l.data)} · ${transferencia ? 'Transferência (não é despesa nova)' : categoriaNome(l.categoriaId) + ' · ' + contaOuCartaoNome(l.carteiraId)}</div></div></div>
         <div class="row-value ${transferencia ? '' : (l.tipo === 'Receita' ? 'up' : 'down')}" style="${transferencia ? 'color:var(--text2)' : ''}">${transferencia ? '' : (l.tipo === 'Receita' ? '+' : '-')}${fmtMoeda(l.valor)}</div></div>`;
       }).join('') || '<div class="stat-sub">Nenhuma transação neste mês.</div>'}
       </div>
@@ -567,13 +661,22 @@ const Render = {
       <div class="grid grid-2">${STATE.cartoes.map(c => {
         const parcelasCartao = STATE.parcelas.filter(p => p.carteiraId === c.id);
         const fatura = AppLogic.calcularFaturaCartao(parcelasCartao, ano, mes);
+        const totalPago = totalPagoFaturaCartaoMes(c.id, ano, mes);
+        const diffCents = AppLogic.centavos(totalPago) - AppLogic.centavos(fatura.total);
+        const hoje = new Date();
+        const mesFuturo = (ano > hoje.getFullYear()) || (ano === hoje.getFullYear() && mes > hoje.getMonth() + 1);
+        const vencimentoJaPassou = (ano < hoje.getFullYear())
+          || (ano === hoje.getFullYear() && mes < hoje.getMonth() + 1)
+          || (ano === hoje.getFullYear() && mes === hoje.getMonth() + 1 && hoje.getDate() >= c.diaVencimento);
+        const divergente = !mesFuturo && vencimentoJaPassou && Math.abs(diffCents) > 2;
+        const aindaNoPrazo = !mesFuturo && !vencimentoJaPassou;
         return `<div class="card">
           <div class="row-title">💳 ${c.nome}</div>
           <div class="stat-sub" style="margin:4px 0 12px;">Fecha dia ${c.diaFechamento} · Vence dia ${c.diaVencimento}</div>
           <div class="stat-value">${fmtMoeda(fatura.total)}</div>
           <div class="stat-sub">fatura de ${MESES_NOMES[mes]}/${ano}</div>
           <div style="display:flex; align-items:center; gap:6px; margin-top:10px; padding:8px 10px; background:#0e1f16; border:1px solid #1c4c2e; border-radius:8px; font-size:12px; color:var(--green);">
-            <span>✓</span><span>Fatura = soma automática das ${fatura.itens.length} parcela(s) com competência neste mês</span>
+            <span>✓</span><span>Fatura = soma automática das ${fatura.itens.length} parcela(s) com competência neste mês (compras feitas até o fechamento anterior ao vencimento de ${MESES_NOMES[mes]})</span>
           </div>
           <button class="btn ghost sm" style="margin-top:12px;" onclick="Modals.toggleDetail('${c.id}')">Ver detalhamento</button>
           <div id="detail-${c.id}" style="display:none; margin-top:12px;">
@@ -585,6 +688,16 @@ const Render = {
             <tr style="font-weight:600;"><td>Soma</td><td></td><td>${fmtMoeda(fatura.total)}</td></tr>
             </table>
           </div>
+          ${mesFuturo ? '' : `
+          <div class="section-title" style="margin:16px 0 6px; font-size:12.5px;">Conferência de pagamento — fatura de ${MESES_NOMES[mes]}/${ano} (vence dia ${c.diaVencimento})</div>
+          <div class="row" style="padding:6px 0;"><div class="row-sub">Fatura deste mês</div><div class="row-value">${fmtMoeda(fatura.total)}</div></div>
+          <div class="row" style="padding:6px 0;"><div class="row-sub">Pago (Pagamento de Fatura) neste mês</div><div class="row-value">${fmtMoeda(totalPago)}</div></div>
+          ${divergente
+            ? `<div class="banner warn" style="margin-top:6px;"><span>⚠️</span><div><b>Diferença de ${fmtMoeda(Math.abs(diffCents / 100))}</b> — ${diffCents > 0 ? 'pago a mais do que o valor desta fatura' : 'da fatura sem pagamento registrado'}. Confira se falta lançar o "💳Pagamento de Fatura" deste cartão em ${MESES_NOMES[mes]}, ou se algum valor foi digitado errado.</div></div>`
+            : aindaNoPrazo
+              ? `<div style="display:flex; align-items:center; gap:6px; margin-top:6px; padding:8px 10px; background:#101b2e; border:1px dashed #2e4468; border-radius:8px; font-size:12px; color:#8fb4e8;"><span>ℹ️</span><span>Ainda dentro do prazo — vence dia ${c.diaVencimento}, sem problema se o pagamento ainda não foi lançado.</span></div>`
+              : `<div style="display:flex; align-items:center; gap:6px; margin-top:6px; padding:8px 10px; background:#0e1f16; border:1px solid #1c4c2e; border-radius:8px; font-size:12px; color:var(--green);"><span>✓</span><span>Pago bate com a fatura deste mês</span></div>`}
+          `}
         </div>`;
       }).join('') || '<div class="card stat-sub">Nenhum cartão cadastrado.</div>'}
       </div>
@@ -714,6 +827,8 @@ const Render = {
 
   relatorioModo: 'mensal',
   setRelatorioModo(m) { this.relatorioModo = m; this.render_relatorios(); },
+  relatorioJanela: 12,
+  setRelatorioJanela(n) { this.relatorioJanela = n; this.render_relatorios(); },
 
   render_relatorios() {
     const el = document.getElementById('screen-relatorios');
@@ -726,10 +841,12 @@ const Render = {
     else { receitas = totalReceitasTodoPeriodo(); despesas = totalDespesasTodoPeriodo(); labelPeriodo = 'Todo o período do seu histórico'; }
 
     const linhas = AppLogic.calcularOrcadoRealizado(STATE.lancamentos, STATE.orcamentos, ano, mes, STATE.parcelas);
-    const universo = modo === 'mensal' ? lancamentosDoMes(ano, mes)
-      : modo === 'anual' ? STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m <= mes; })
-      : STATE.lancamentos;
-    const maiorGasto = universo.filter(l => l.tipo === 'Despesa' && !AppLogic.isTransferenciaFatura(l)).sort((a, b) => b.valor - a.valor)[0];
+    // Mesma base (itens por competência de parcela) usada nos totais acima, para "maior gasto individual"
+    // não citar uma compra de um mês diferente do que está sendo exibido.
+    const universo = modo === 'mensal' ? itensDoMes(ano, mes)
+      : modo === 'anual' ? itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= mes; })
+      : itensTodoPeriodo();
+    const maiorGasto = universo.filter(i => i.tipo === 'Despesa' && !i.transferencia).sort((a, b) => b.valor - a.valor)[0];
 
     function badge(status) {
       if (status === 'estourado') return '<span style="color:var(--red); font-weight:600;">Estourado</span>';
@@ -742,10 +859,29 @@ const Render = {
       const [y, m] = chave.split('-').map(Number);
       return { chave, y, m, receita: totalReceitasMes(y, m), despesa: totalDespesasMes(y, m) };
     });
-    const maxVal = Math.max(1, ...evolucao.map(e => Math.max(e.receita, e.despesa)));
+    // O acumulado (saldo corrido) precisa ser calculado sobre TODO o histórico, sem cortes — senão o
+    // valor de cada barra ficaria errado (recomeçaria do zero na borda da janela visível). O corte por
+    // período abaixo só afeta QUANTAS barras aparecem na tela, não a conta em si.
     let saldoAcum = 0;
     const acumulado = evolucao.map(e => { saldoAcum += (e.receita - e.despesa); return { ...e, acumulado: AppLogic.reais(AppLogic.centavos(saldoAcum)) }; });
-    const maxAcum = Math.max(1, ...acumulado.map(e => Math.abs(e.acumulado)));
+
+    // Janela de exibição dos dois gráficos abaixo — evita dezenas de barras espremidas no quadro.
+    // Por padrão mostra uma janela centrada no mês atual (metade passado, metade futuro, quando existir
+    // histórico/parcelamento futuro); "Todo o período" remove o corte.
+    const janelaN = this.relatorioJanela;
+    let janela = acumulado;
+    if (janelaN !== 'todos' && acumulado.length > janelaN) {
+      const hoje = new Date();
+      const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+      const idxHoje = acumulado.findIndex(e => e.chave >= chaveHoje);
+      const centro = idxHoje === -1 ? acumulado.length : idxHoje;
+      let ini = Math.max(0, centro - Math.ceil(janelaN / 2));
+      let fim = Math.min(acumulado.length, ini + janelaN);
+      if (fim - ini < janelaN) ini = Math.max(0, fim - janelaN);
+      janela = acumulado.slice(ini, fim);
+    }
+    const maxVal = Math.max(1, ...janela.map(e => Math.max(e.receita, e.despesa)));
+    const maxAcum = Math.max(1, ...janela.map(e => Math.abs(e.acumulado)));
 
     el.innerHTML = `
       <div class="topbar"><h1>Relatórios</h1>${mesNavHtml()}</div>
@@ -766,22 +902,28 @@ const Render = {
         <button class="btn ghost sm" onclick="Actions.exportarCSV('mes')">Exportar Excel — mês selecionado</button>
         <button class="btn ghost sm" onclick="Actions.exportarCSV('tudo')">Exportar Excel — todo o período</button>
       </div>
-      <div class="section-title">Evolução mês a mês (todo o histórico com movimento)</div>
+      <div class="section-title">Evolução mês a mês${janelaN === 'todos' ? ' (todo o histórico com movimento)' : ''}</div>
+      <div class="tabs" style="margin-bottom:10px;">
+        <div class="tab ${janelaN===6?'active':''}" onclick="Render.setRelatorioJanela(6)">6 meses</div>
+        <div class="tab ${janelaN===12?'active':''}" onclick="Render.setRelatorioJanela(12)">12 meses</div>
+        <div class="tab ${janelaN===24?'active':''}" onclick="Render.setRelatorioJanela(24)">24 meses</div>
+        <div class="tab ${janelaN==='todos'?'active':''}" onclick="Render.setRelatorioJanela('todos')">Todo o período</div>
+      </div>
       <div class="card">
         <div class="bars" style="height:130px;">
-          ${evolucao.map(e => `<div class="bar-col">
+          ${janela.map(e => `<div class="bar-col">
             <div class="bar-value">${fmtMoeda(e.despesa)}</div>
             <div class="bar" style="height:${Math.round((e.despesa/maxVal)*100)}%; background:var(--red)"></div>
             <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)}</div>
           </div>`).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras vermelhas = despesa do mês. Toque em "Mensal" acima e use as setas para abrir um mês específico.</div>
+        <div class="stat-sub" style="margin-top:8px;">Barras vermelhas = despesa do mês. Toque em "Mensal" acima e use as setas para abrir um mês específico. Quer ver mais meses (passado ou futuro)? Escolha um período maior acima.</div>
       </div>
 
       <div class="section-title">Saldo acumulado (receitas − despesas, mês a mês)</div>
       <div class="card">
         <div class="bars-zero">
-          ${acumulado.map(e => {
+          ${janela.map(e => {
             const isPos = e.acumulado >= 0;
             const pct = Math.max(4, Math.round((Math.abs(e.acumulado) / maxAcum) * 100));
             return `<div class="bar-col-zero">
@@ -792,7 +934,7 @@ const Render = {
             </div>`;
           }).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo acumulado até aquele mês; abaixo = negativo. Saldo acumulado no último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b></div>
+        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo acumulado até aquele mês; abaixo = negativo (mesmo período selecionado acima). Saldo acumulado no último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b></div>
       </div>
 
       <div class="section-title">Orçado x realizado por subcategoria (mês selecionado: ${MESES_NOMES[mes]}/${ano})</div>
@@ -923,6 +1065,7 @@ const Modals = {
     const catOpts = STATE.categorias.map(c => `<option value="${c.id}">${CATEGORIA_ICONS[c.id]||''} ${c.nome}</option>`).join('');
     const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}">${c.nome}</option>`)
       .concat(STATE.contas.map(c => `<option value="conta_${c.id}">${c.nome}</option>`)).join('');
+    const cartaoFaturaOpts = STATE.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
     document.getElementById('modalNovaTransacaoBody').innerHTML = `
       <div class="modal-head"><h3>Nova transação</h3><button class="close-x" onclick="Modals.close('novaTransacao')">✕</button></div>
       <div class="tabs">
@@ -936,20 +1079,20 @@ const Modals = {
         <div class="field"><label>Data</label><input id="ntData" type="date" value="${VIEW.ano}-${String(VIEW.mes).padStart(2,'0')}-01"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Categoria</label><select id="ntCategoria" onchange="Modals.refreshSubcategorias()">${catOpts}</select></div>
+        <div class="field"><label>Categoria</label><select id="ntCategoria" onchange="Modals.refreshSubcategorias(); Modals.refreshCampoCartaoFatura('nt')">${catOpts}</select></div>
         <div class="field"><label>Subcategoria</label><select id="ntSubcategoria"></select></div>
       </div>
       <div class="field"><label>Conta ou cartão</label><select id="ntConta" onchange="Modals.refreshParcelas()">${contaOpts}</select></div>
+      <div class="field" id="ntCampoCartaoFatura" style="display:none;"><label>Qual cartão esta fatura está pagando?</label><select id="ntCartaoFatura">${cartaoFaturaOpts}</select></div>
       <div class="field" id="campoParcelas" style="display:none;"><label>Número de parcelas</label>
         <select id="ntParcelas" onchange="Modals.calcParcelasPreview()">
-          <option value="1">À vista (1x)</option><option value="2">2x</option><option value="3">3x</option>
-          <option value="4">4x</option><option value="5">5x</option><option value="6">6x</option>
-          <option value="10">10x</option><option value="12">12x</option>
+          ${parcelaOptionsHtml()}
         </select></div>
       <div id="parcelasPreview" class="logic-note" style="margin-top:0; display:none;"></div>
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarTransacao()">Lançar</button>`;
     Modals.refreshSubcategorias();
     Modals.refreshParcelas();
+    Modals.refreshCampoCartaoFatura('nt');
     Modals.open('novaTransacao');
   },
   setTipoTransacao(tipo) {
@@ -963,6 +1106,11 @@ const Modals = {
     const catId = Number(document.getElementById('ntCategoria').value);
     const subs = STATE.subcategorias.filter(s => s.categoriaId === catId);
     document.getElementById('ntSubcategoria').innerHTML = subs.map(s => `<option value="${s.id}">${s.nome}</option>`).join('');
+  },
+  refreshCampoCartaoFatura(prefixo) {
+    const catId = Number(document.getElementById(prefixo + 'Categoria').value);
+    const campo = document.getElementById(prefixo + 'CampoCartaoFatura');
+    if (campo) campo.style.display = (catId === AppLogic.CATEGORIA_PAGAMENTO_FATURA) ? 'block' : 'none';
   },
   refreshParcelas() {
     const val = document.getElementById('ntConta').value;
@@ -1051,6 +1199,86 @@ const Modals = {
     Modals.open('syncManual');
     document.getElementById('fileSyncManual').value = '';
   },
+
+  openEditarTransacao(id) {
+    const l = STATE.lancamentos.find(x => x.id === id);
+    if (!l) return;
+    const descEsc = String(l.descricao).replace(/"/g, '&quot;');
+    const catOpts = STATE.categorias.map(c => `<option value="${c.id}" ${c.id === l.categoriaId ? 'selected' : ''}>${CATEGORIA_ICONS[c.id] || ''} ${c.nome}</option>`).join('');
+    const isCartaoAtual = l.formaPagamento === 'Cartão de Crédito';
+    const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}" ${isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)
+      .concat(STATE.contas.map(c => `<option value="conta_${c.id}" ${!isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)).join('');
+    const cartaoFaturaAtual = l.categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA ? resolverCartaoDaFatura(l) : null;
+    const cartaoFaturaOpts = STATE.cartoes.map(c => `<option value="${c.id}" ${cartaoFaturaAtual && c.id === cartaoFaturaAtual.id ? 'selected' : ''}>${c.nome}</option>`).join('');
+    document.getElementById('modalEditarTransacaoBody').innerHTML = `
+      <div class="modal-head"><h3>Editar transação</h3><button class="close-x" onclick="Modals.close('editarTransacao')">✕</button></div>
+      <div class="tabs">
+        <div class="tab" id="etTabDespesa" style="flex:1; text-align:center;" onclick="Modals.setTipoEdicao('Despesa')">Despesa</div>
+        <div class="tab" id="etTabReceita" style="flex:1; text-align:center;" onclick="Modals.setTipoEdicao('Receita')">Receita</div>
+      </div>
+      <input type="hidden" id="etTipo" value="${l.tipo}">
+      <input type="hidden" id="etId" value="${l.id}">
+      ${l.qtdParcelas > 1 ? `<div class="banner warn"><span>⚠️</span><div>Esta compra foi parcelada em ${l.qtdParcelas}x. Você está editando a compra inteira (valor total abaixo) — ao salvar, todas as ${l.qtdParcelas} parcelas são recalculadas.</div></div>` : ''}
+      <div class="field"><label>Descrição</label><input id="etDescricao" value="${descEsc}"></div>
+      <div class="field-row">
+        <div class="field"><label>Valor (R$)</label><input id="etValor" type="number" step="0.01" value="${l.valor}"></div>
+        <div class="field"><label>Data</label><input id="etData" type="date" value="${l.data}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Categoria</label><select id="etCategoria" onchange="Modals.refreshSubcategoriasEdicao(); Modals.refreshCampoCartaoFatura('et')">${catOpts}</select></div>
+        <div class="field"><label>Subcategoria</label><select id="etSubcategoria"></select></div>
+      </div>
+      <div class="field"><label>Conta ou cartão</label><select id="etConta" onchange="Modals.refreshParcelasEdicao()">${contaOpts}</select></div>
+      <div class="field" id="etCampoCartaoFatura" style="display:none;"><label>Qual cartão esta fatura está pagando?</label><select id="etCartaoFatura">${cartaoFaturaOpts}</select></div>
+      <div class="field" id="etCampoParcelas" style="display:none;"><label>Número de parcelas</label>
+        <select id="etParcelas" onchange="Modals.calcParcelasPreviewEdicao()">
+          ${parcelaOptionsHtml()}
+        </select></div>
+      <div id="etParcelasPreview" class="logic-note" style="margin-top:0; display:none;"></div>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <button class="btn" style="flex:1;" onclick="Actions.salvarEdicaoTransacao()">Salvar alterações</button>
+        <button class="btn danger" onclick="Actions.excluirTransacao('${l.id}')">Excluir</button>
+      </div>`;
+    Modals.setTipoEdicao(l.tipo);
+    Modals.refreshSubcategoriasEdicao();
+    document.getElementById('etSubcategoria').value = l.subcategoriaId;
+    document.getElementById('etParcelas').value = String(l.qtdParcelas || 1);
+    Modals.refreshParcelasEdicao();
+    Modals.refreshCampoCartaoFatura('et');
+    Modals.open('editarTransacao');
+  },
+  setTipoEdicao(tipo) {
+    document.getElementById('etTipo').value = tipo;
+    document.getElementById('etTabDespesa').style.background = tipo === 'Despesa' ? '#3d1414' : '';
+    document.getElementById('etTabDespesa').style.color = tipo === 'Despesa' ? '#f87171' : '';
+    document.getElementById('etTabReceita').style.background = tipo === 'Receita' ? '#0e2f1c' : '';
+    document.getElementById('etTabReceita').style.color = tipo === 'Receita' ? '#4ade80' : '';
+  },
+  refreshSubcategoriasEdicao() {
+    const catId = Number(document.getElementById('etCategoria').value);
+    const subs = STATE.subcategorias.filter(s => s.categoriaId === catId);
+    document.getElementById('etSubcategoria').innerHTML = subs.map(s => `<option value="${s.id}">${s.nome}</option>`).join('');
+  },
+  refreshParcelasEdicao() {
+    const val = document.getElementById('etConta').value;
+    const isCartao = val.startsWith('cartao_');
+    document.getElementById('etCampoParcelas').style.display = isCartao ? 'block' : 'none';
+    document.getElementById('etParcelasPreview').style.display = isCartao ? 'block' : 'none';
+    if (isCartao) Modals.calcParcelasPreviewEdicao();
+  },
+  calcParcelasPreviewEdicao() {
+    const n = parseInt(document.getElementById('etParcelas').value, 10);
+    const valor = parseFloat(document.getElementById('etValor').value) || 0;
+    const box = document.getElementById('etParcelasPreview');
+    if (!valor) { box.innerHTML = '<span>ℹ️</span><div>Informe o valor para ver a prévia das parcelas.</div>'; return; }
+    const data = document.getElementById('etData').value;
+    const contaId = document.getElementById('etConta').value.replace('cartao_', '');
+    const cartao = STATE.cartoes.find(c => String(c.id) === contaId);
+    if (!cartao) { box.innerHTML = ''; return; }
+    const parcelas = AppLogic.gerarParcelas(valor, n, data, cartao.diaFechamento, cartao.diaVencimento);
+    if (n === 1) { box.innerHTML = '<span>ℹ️</span><div>Compra à vista — valor total debitado na fatura de ' + MESES_NOMES[parcelas[0].mes] + '/' + parcelas[0].ano + '.</div>'; return; }
+    box.innerHTML = '<span>ℹ️</span><div><b>Prévia automática:</b><br>' + parcelas.map(p => `Parcela ${p.numero}/${p.qtd}: ${fmtMoeda(p.valor)} — ${MESES_NOMES[p.mes]}/${p.ano}`).join('<br>') + '<br>A última parcela absorve o arredondamento — o app recalcula essas parcelas sozinho ao salvar.</div>';
+  },
 };
 
 // ---------------- Actions (CRUD) ----------------
@@ -1067,11 +1295,13 @@ const Actions = {
     const isCartao = contaVal.startsWith('cartao_');
     const carteiraId = Number(contaVal.replace('cartao_', '').replace('conta_', ''));
     const qtdParcelas = isCartao ? parseInt(document.getElementById('ntParcelas').value, 10) : 1;
+    const isPagamentoFatura = categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA;
+    const cartaoFaturaId = isPagamentoFatura ? Number(document.getElementById('ntCartaoFatura').value) || null : null;
 
     const lanc = {
       id: uuid(), data, tipo, categoriaId, subcategoriaId, descricao, valor,
       formaPagamento: isCartao ? 'Cartão de Crédito' : 'Outro', carteiraId,
-      qtdParcelas, parcelaAtual: 1,
+      qtdParcelas, parcelaAtual: 1, cartaoFaturaId,
     };
     STATE.lancamentos.push(lanc);
 
@@ -1085,6 +1315,56 @@ const Actions = {
     }
     await persist();
     Modals.close('novaTransacao');
+    Nav.show(Nav.atual);
+  },
+
+  async salvarEdicaoTransacao() {
+    const id = document.getElementById('etId').value;
+    const l = STATE.lancamentos.find(x => x.id === id);
+    if (!l) return;
+    const tipo = document.getElementById('etTipo').value;
+    const descricao = document.getElementById('etDescricao').value.trim();
+    const valor = parseFloat(document.getElementById('etValor').value);
+    const data = document.getElementById('etData').value;
+    const categoriaId = Number(document.getElementById('etCategoria').value);
+    const subcategoriaId = Number(document.getElementById('etSubcategoria').value);
+    const contaVal = document.getElementById('etConta').value;
+    if (!descricao || !valor || !data || !contaVal) { alert('Preencha descrição, valor, data e conta/cartão.'); return; }
+    const isCartao = contaVal.startsWith('cartao_');
+    const carteiraId = Number(contaVal.replace('cartao_', '').replace('conta_', ''));
+    const qtdParcelas = isCartao ? parseInt(document.getElementById('etParcelas').value, 10) : 1;
+    const isPagamentoFatura = categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA;
+    const cartaoFaturaId = isPagamentoFatura ? Number(document.getElementById('etCartaoFatura').value) || null : null;
+
+    // Remove as parcelas antigas deste lançamento — se for cartão, são recriadas do zero abaixo.
+    STATE.parcelas = STATE.parcelas.filter(p => p.lancamentoId !== id);
+
+    Object.assign(l, {
+      tipo, data, categoriaId, subcategoriaId, descricao, valor,
+      formaPagamento: isCartao ? 'Cartão de Crédito' : 'Outro', carteiraId,
+      qtdParcelas, parcelaAtual: 1, cartaoFaturaId,
+    });
+
+    if (isCartao) {
+      const cartao = STATE.cartoes.find(c => c.id === carteiraId);
+      const geradas = AppLogic.gerarParcelas(valor, qtdParcelas, data, cartao.diaFechamento, cartao.diaVencimento);
+      geradas.forEach(g => STATE.parcelas.push({
+        id: uuid(), lancamentoId: l.id, carteiraId, categoriaId, subcategoriaId,
+        valor: g.valor, numero: g.numero, qtd: g.qtd, ano: g.ano, mes: g.mes,
+      }));
+    }
+    await persist();
+    Modals.close('editarTransacao');
+    Nav.show(Nav.atual);
+  },
+  async excluirTransacao(id) {
+    const l = STATE.lancamentos.find(x => x.id === id);
+    if (!l) return;
+    if (!confirm(`Excluir a transação "${l.descricao}" (${fmtMoeda(l.valor)}, ${fmtData(l.data)})?\n\nEsta ação não pode ser desfeita.`)) return;
+    STATE.lancamentos = STATE.lancamentos.filter(x => x.id !== id);
+    STATE.parcelas = STATE.parcelas.filter(p => p.lancamentoId !== id);
+    await persist();
+    Modals.close('editarTransacao');
     Nav.show(Nav.atual);
   },
 
@@ -1153,10 +1433,10 @@ const Actions = {
     let lista;
     let nomeArquivo;
     if (escopo === 'mes') {
-      lista = lancamentosDoMes(ano, mes);
+      lista = itensDoMes(ano, mes);
       nomeArquivo = 'transacoes-' + String(mes).padStart(2, '0') + '-' + ano + '.csv';
     } else {
-      lista = STATE.lancamentos.slice();
+      lista = itensTodoPeriodo();
       nomeArquivo = 'transacoes-todo-periodo.csv';
     }
     lista = lista.slice().sort((a, b) => a.data.localeCompare(b.data));
@@ -1168,7 +1448,7 @@ const Actions = {
     const linhas = lista.map(l => [
       l.data, l.tipo, categoriaNome(l.categoriaId), subcategoriaNome(l.subcategoriaId),
       l.descricao, l.valor.toFixed(2).replace('.', ','), l.formaPagamento, contaOuCartaoNome(l.carteiraId),
-      l.qtdParcelas > 1 ? (l.parcelaAtual + '/' + l.qtdParcelas) : '',
+      l.isParcela && l.qtd > 1 ? (l.numero + '/' + l.qtd) : '',
     ].map(csvEscape).join(';'));
     const csv = '﻿' + cab.join(';') + '\r\n' + linhas.join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
