@@ -4,15 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MinhaFamília — Orçamento &amp; Finanças</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/style.css">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#3b82f6">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Orçamento Familiar">
 </head>
 <body>
 <div class="app" id="app" style="display:none;">
@@ -101,25 +95,21 @@
 </div>
 
 <div class="overlay" id="overlay-novaTransacao"><div class="modal" id="modalNovaTransacaoBody"></div></div>
+<div class="overlay" id="overlay-editarTransacao"><div class="modal" id="modalEditarTransacaoBody"></div></div>
 <div class="overlay" id="overlay-novaConta"><div class="modal" id="modalNovaContaBody"></div></div>
 <div class="overlay" id="overlay-novoCartao"><div class="modal" id="modalNovoCartaoBody"></div></div>
 <div class="overlay" id="overlay-novaMeta"><div class="modal" id="modalNovaMetaBody"></div></div>
 <div class="overlay" id="overlay-novoAtivo"><div class="modal" id="modalNovoAtivoBody"></div></div>
 <div class="overlay" id="overlay-novaSubcategoria"><div class="modal" id="modalNovaSubcategoriaBody"></div></div>
 <div class="overlay" id="overlay-syncManual"><div class="modal" id="modalSyncManualBody"></div></div>
+<div class="overlay" id="overlay-syncColar"><div class="modal" id="modalSyncColarBody"></div></div>
 
-<script src="seed.js"></script>
-<script src="crypto.js"></script>
-<script src="logic.js"></script>
-<script src="storage.js"></script>
-<script src="sync.js"></script>
-<script src="app.js"></script>
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    });
-  }
-</script>
+<script type="module" src="js/googlesync.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/crypto.js"></script>
+<script src="js/logic.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>
