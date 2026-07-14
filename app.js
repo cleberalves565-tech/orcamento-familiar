@@ -94,6 +94,18 @@ async function persist() {
       await AppLanSync.push(raw);
     }
   } catch (e) { /* falha silenciosa — rede local é um extra, não pode travar o salvamento normal */ }
+  try {
+    if (AppGithubSync.isAvailable()) {
+      const raw = await AppStorage.getRaw();
+      await AppGithubSync.push(raw);
+    }
+  } catch (e) { /* falha silenciosa — sincronização pela internet é um extra, não pode travar o salvamento normal */ }
+  try {
+    if (AppGoogleSync.isSignedIn()) {
+      const raw = await AppStorage.getRaw();
+      await AppGoogleSync.push(raw);
+    }
+  } catch (e) { /* falha silenciosa — sincronização com a conta Google é um extra, não pode travar o salvamento normal */ }
 }
 
 // ---------------- Verificação de integridade (auditoria real) ----------------
@@ -135,6 +147,10 @@ const Auth = {
     STATE = null;
     if (Sync._lanInterval) { clearInterval(Sync._lanInterval); Sync._lanInterval = null; }
     Sync._lanPin = null;
+    if (Sync._githubInterval) { clearInterval(Sync._githubInterval); Sync._githubInterval = null; }
+    Sync._githubPin = null;
+    AppGoogleSync.stopListening();
+    Sync._googlePin = null;
     document.getElementById('app').style.display = 'none';
     document.getElementById('authScreen').style.display = 'flex';
     this.renderLogin();
@@ -192,6 +208,8 @@ const Auth = {
       this.resetInactivity();
       Sync.checkNewerOnLogin(pinUsado);
       Sync.iniciarLan(pinUsado);
+      Sync.iniciarGithub(pinUsado);
+      Sync.iniciarGoogleListener(pinUsado);
     } catch (e) {
       if (msg) msg.textContent = 'PIN incorreto — tente novamente.';
       this.pinBuffer = '';
@@ -270,6 +288,9 @@ const Auth = {
       <div class="steps"><div class="step done"></div><div class="step done"></div><div class="step done"></div><div class="step"></div></div>
       <div class="card" style="max-width:480px;">
         <div class="row-title" style="margin-bottom:14px; font-size:15px;">Como você quer começar?</div>
+        <div id="googleSyncRow" class="row" style="border:1px solid var(--green); border-radius:10px; padding:14px; cursor:pointer; margin-bottom:10px;" onclick="Auth.iniciarSincronizacaoGoogle()">
+          <div><div class="row-title">🔵 Entrar com Google (recomendado)</div><div class="row-sub">Se você já usa o app no outro aparelho, entre com a mesma conta Google aqui e os dados aparecem sozinhos — sem token, sem arquivo, sem precisar da mesma Wi-Fi</div></div>
+        </div>
         ${temImportacaoReal ? `
         <div class="row" style="border:1px solid var(--accent); border-radius:10px; padding:14px; margin-bottom:10px; cursor:pointer;" onclick="Auth.finishOnboarding(true)">
           <div><div class="row-title">Importar da planilha (recomendado)</div><div class="row-sub">Traz os ${SEED.lancamentos.length} lançamentos reais, categorias, cartões e orçamentos já cadastrados</div></div>
@@ -283,6 +304,9 @@ const Auth = {
         </div>
         <div id="colarCodigoRow" class="row" style="border:1px dashed var(--border); border-radius:10px; padding:14px; cursor:pointer; margin-top:10px;" onclick="Auth.iniciarSincronizacaoExistenteColar()">
           <div><div class="row-title">Não consegue escolher o arquivo? Cole o código manualmente</div><div class="row-sub">Alternativa quando o seletor de arquivos do celular não deixa selecionar o arquivo sincronizado (só recomendado para arquivos pequenos)</div></div>
+        </div>
+        <div id="githubSyncRow" class="row" style="border:1px dashed var(--border); border-radius:10px; padding:14px; cursor:pointer; margin-top:10px;" onclick="Auth.iniciarSincronizacaoGithub()">
+          <div><div class="row-title">🌐 Sincronizar pela internet (GitHub)</div><div class="row-sub">Não depende de Wi-Fi de casa nem de selecionar arquivo — precisa configurar primeiro no outro aparelho, em Configurações</div></div>
         </div>
       </div>`;
     this.fillLanOnboardRow();
@@ -389,6 +413,56 @@ const Auth = {
     document.body.appendChild(input);
     input.click();
   },
+  iniciarSincronizacaoGithub() {
+    const area = document.getElementById('authArea');
+    area.innerHTML = `
+      <div class="topbar"><h1>Sincronizar pela internet</h1></div>
+      <div class="card" style="max-width:480px;">
+        <div class="stat-sub" style="margin-bottom:10px;">Cole aqui o mesmo token de acesso do GitHub que você já criou no outro aparelho (em Configurações → Sincronização pela internet). Não precisa criar um token novo — é o mesmo dos dois aparelhos.</div>
+        <div class="field"><input id="githubTokenInput" type="password" placeholder="Cole o token aqui" style="width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:10px;" autocapitalize="off" autocorrect="off"></div>
+        <div class="stat-sub" id="githubTokenMsg" style="min-height:16px; color:var(--red); margin-bottom:8px;"></div>
+        <button class="btn" style="width:100%;" onclick="Auth.confirmarGithubToken()">Conectar</button>
+        <button class="btn ghost sm" style="width:100%; margin-top:8px;" onclick="Auth.renderOnboardingStep3()">Voltar</button>
+      </div>`;
+  },
+  async confirmarGithubToken() {
+    const token = document.getElementById('githubTokenInput').value.trim();
+    const msg = document.getElementById('githubTokenMsg');
+    if (!token) { if (msg) msg.textContent = 'Cole o token antes de continuar.'; return; }
+    if (msg) { msg.style.color = 'var(--text)'; msg.textContent = 'Conectando...'; }
+    try {
+      await AppGithubSync.testToken(token);
+      const raw = await AppGithubSync.pull();
+      if (!raw || !raw.salt || !raw.payload) {
+        if (msg) { msg.style.color = 'var(--red)'; msg.textContent = 'Conectou, mas ainda não há nenhum dado salvo pelo outro aparelho — sincronize alguma coisa lá primeiro e tente de novo aqui.'; }
+        return;
+      }
+      this._syncedRaw = raw;
+      this.renderSyncPinEntry();
+    } catch (e) {
+      if (msg) { msg.style.color = 'var(--red)'; msg.textContent = e.message || 'Não foi possível conectar.'; }
+    }
+  },
+  async iniciarSincronizacaoGoogle() {
+    try {
+      await AppGoogleSync.signIn();
+      const raw = await AppGoogleSync.pull();
+      if (raw && raw.salt && raw.payload) {
+        // Já existe algo salvo nessa conta (provavelmente do outro aparelho) — pede o PIN pra abrir.
+        this._syncedRaw = raw;
+        this.renderSyncPinEntry();
+        return;
+      }
+      // Login feito, mas ainda não há nada salvo nessa conta — provavelmente é o
+      // primeiro aparelho a usar essa conta Google. Deixa a pessoa continuar o
+      // onboarding normal (vazio/importar); quando terminar, os dados são
+      // enviados automaticamente pra essa conta (ver finishOnboarding).
+      alert('Login feito! Ainda não há dados salvos nessa conta do Google — vamos continuar a configuração normalmente, e seus dados ficam disponíveis para o outro aparelho a partir de agora.');
+      this.renderOnboardingStep3();
+    } catch (e) {
+      alert('Não foi possível entrar com o Google: ' + (e.message || 'tente de novo.'));
+    }
+  },
   renderSyncPinEntry() {
     const area = document.getElementById('authArea');
     area.innerHTML = `
@@ -421,12 +495,17 @@ const Auth = {
         Nav.show('dashboard');
         this.resetInactivity();
         Sync.iniciarLan(this.pinBuffer);
+        Sync.iniciarGithub(this.pinBuffer);
+        Sync.iniciarGoogleListener(this.pinBuffer);
       } catch (e) {
-        if (this.pinBuffer.length === 6) {
-          if (msg) msg.textContent = 'PIN incorreto — tente novamente.';
-          this.pinBuffer = '';
-          this.paintDots();
-        }
+        // Antes, só avisava e limpava o campo quando o PIN chegava a 6 dígitos —
+        // então PINs de 4 ou 5 dígitos errados ficavam "travados na tela" sem
+        // nenhum aviso, porque nada acontecia até a pessoa (sem saber) completar
+        // 6 dígitos. Agora avisa e limpa assim que a tentativa falha, do mesmo
+        // jeito que a tela de login normal (Auth.tryLogin) já fazia.
+        if (msg) msg.textContent = 'PIN incorreto — tente novamente.';
+        this.pinBuffer = '';
+        this.paintDots();
       }
     }
   },
@@ -461,6 +540,15 @@ const Auth = {
     document.getElementById('app').style.display = 'flex';
     Nav.show('dashboard');
     this.resetInactivity();
+    Sync.iniciarLan(this.novoPin);
+    Sync.iniciarGithub(this.novoPin);
+    if (AppGoogleSync.isSignedIn()) {
+      try {
+        const raw = await AppStorage.getRaw();
+        if (raw) await AppGoogleSync.push(raw);
+      } catch (e) { /* falha silenciosa — a sincronização com o Google é um extra */ }
+      Sync.iniciarGoogleListener(this.novoPin);
+    }
   },
 };
 
@@ -1079,6 +1167,16 @@ const Render = {
         <div id="lanSyncConfigBody" class="stat-sub">Verificando...</div>
       </div>
       <div class="card" style="margin-bottom:10px;">
+        <div class="row-title" style="margin-bottom:8px;">🔵 Login com Google (recomendado)</div>
+        <div class="stat-sub" style="margin-bottom:10px;">A forma mais simples de manter os dois aparelhos atualizados: entre com a mesma conta Google nos dois. Atualiza em tempo real, sem token pra copiar e sem depender da mesma rede Wi-Fi.</div>
+        <div id="googleSyncConfigBody">Verificando...</div>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row-title" style="margin-bottom:8px;">🌐 Sincronização pela internet (GitHub)</div>
+        <div class="stat-sub" style="margin-bottom:10px;">Mantém os dados atualizados nos dois aparelhos por internet comum — não depende de estar na mesma Wi-Fi de casa, nem de selecionar arquivo no celular. Usa um espaço privado na sua própria conta do GitHub para guardar o pacote já criptografado (o GitHub nunca vê os dados de verdade, só quem tem o PIN consegue abrir).</div>
+        <div id="githubSyncConfigBody">Verificando...</div>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
         <div class="row"><div class="row-title">Integridade dos dados</div><div class="row-value" style="color:${integridade.divergentes.length?'var(--red)':'var(--green)'}">${integridade.ok}/${integridade.total} conferem</div></div>
       </div>
       <div class="card">
@@ -1086,6 +1184,8 @@ const Render = {
       </div>`;
     this.fillSyncCard();
     this.fillLanSyncCard();
+    this.fillGithubSyncCard();
+    this.fillGoogleSyncCard();
   },
 
   async fillLanSyncCard() {
@@ -1121,6 +1221,67 @@ const Render = {
           <button class="btn sm" onclick="Sync.ativar()">Criar arquivo de sincronização</button>
           <button class="btn ghost sm" onclick="Sync.vincularExistente()">Já existe um arquivo (vincular)</button>
         </div>`;
+    }
+  },
+
+  async fillGithubSyncCard() {
+    const body = document.getElementById('githubSyncConfigBody');
+    if (!body) return;
+    const ativo = AppGithubSync.isConfigured();
+    if (ativo) {
+      body.innerHTML = `
+        <div class="row" style="border:none; padding:0 0 10px;">
+          <div><div class="row-title" style="color:var(--green);">Ativa ✓</div><div class="row-sub">Verificando por uma versão mais nova a cada ~20 segundos</div></div>
+        </div>
+        <button class="btn ghost sm" onclick="Sync.desativarGithub()">Desativar</button>`;
+    } else {
+      const linkToken = 'https://github.com/settings/tokens/new?description=Orcamento+Familiar+-+Sincronizacao&scopes=gist';
+      body.innerHTML = `
+        <ol class="stat-sub" style="margin:0 0 10px 18px; padding:0;">
+          <li>Abra <a href="${linkToken}" target="_blank" rel="noopener">este link do GitHub</a> (pede pra você entrar na sua conta, se ainda não estiver).</li>
+          <li>Role até o final da página e toque em "Generate token".</li>
+          <li>Copie o código que aparecer (começa com "ghp_") — ele só aparece uma vez, nessa hora.</li>
+          <li>Cole aqui embaixo e toque em "Ativar". No outro aparelho, cole o mesmo token — não precisa criar um novo.</li>
+        </ol>
+        <div class="field"><input id="githubTokenConfigInput" type="password" placeholder="Cole o token aqui" style="width:100%; background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:10px;" autocapitalize="off" autocorrect="off"></div>
+        <div class="stat-sub" id="githubTokenConfigMsg" style="min-height:16px; color:var(--red); margin-bottom:8px;"></div>
+        <button class="btn sm" onclick="Render.confirmarAtivarGithub()">Ativar</button>`;
+    }
+  },
+  async fillGoogleSyncCard() {
+    const body = document.getElementById('googleSyncConfigBody');
+    if (!body) return;
+    await AppGoogleSync.waitReady();
+    if (AppGoogleSync.isSignedIn()) {
+      const user = AppGoogleSync.getCurrentUser();
+      body.innerHTML = `
+        <div class="row" style="border:none; padding:0 0 10px;">
+          <div><div class="row-title" style="color:var(--green);">Conectado ✓</div><div class="row-sub">${user && user.email ? user.email : 'Conta Google'} — atualiza em tempo real</div></div>
+        </div>
+        <button class="btn ghost sm" onclick="Sync.desativarGoogle()">Sair dessa conta</button>`;
+    } else {
+      body.innerHTML = `<button class="btn sm" onclick="Render.confirmarAtivarGoogle()">Entrar com Google</button>`;
+    }
+  },
+  async confirmarAtivarGoogle() {
+    try {
+      await Sync.ativarGoogle();
+      Nav.show('config');
+    } catch (e) {
+      alert('Não foi possível entrar com o Google: ' + (e.message || 'tente de novo.'));
+    }
+  },
+  async confirmarAtivarGithub() {
+    const input = document.getElementById('githubTokenConfigInput');
+    const msg = document.getElementById('githubTokenConfigMsg');
+    const token = input ? input.value.trim() : '';
+    if (!token) { if (msg) msg.textContent = 'Cole o token antes de continuar.'; return; }
+    if (msg) { msg.style.color = 'var(--text)'; msg.textContent = 'Conectando...'; }
+    try {
+      await Sync.ativarGithub(token);
+      Nav.show('config');
+    } catch (e) {
+      if (msg) { msg.style.color = 'var(--red)'; msg.textContent = e.message || 'Não foi possível conectar.'; }
     }
   },
 };
@@ -1686,6 +1847,124 @@ const Sync = {
     } catch (e) {
       alert('Não foi possível carregar a versão da rede local: ' + e.message);
     }
+  },
+
+  // ---- Sincronização pela internet (Gist privado do GitHub) ----
+  _githubPin: null,
+  _githubInterval: null,
+  async iniciarGithub(pinUsado) {
+    // Guarda o PIN sempre que loga, mesmo se a sincronização pela internet
+    // ainda não estiver configurada — assim, se a pessoa ativar depois (na
+    // tela de Configurações, já logada), o PIN certo já está disponível sem
+    // precisar pedir de novo.
+    this._githubPin = pinUsado;
+    if (!AppGithubSync.isConfigured()) return;
+    this.checkNewerFromGithub();
+    if (this._githubInterval) clearInterval(this._githubInterval);
+    this._githubInterval = setInterval(() => this.checkNewerFromGithub(), 20000);
+  },
+  async checkNewerFromGithub() {
+    const banner = document.getElementById('syncBanner');
+    if (!banner || !this._githubPin) return;
+    if (banner.innerHTML) return; // já tem um aviso na tela — não empilha
+    try {
+      const synced = await AppGithubSync.pull();
+      if (!synced || !synced.atualizadoEm) return;
+      const local = await AppStorage.getRaw();
+      if (local && local.atualizadoEm && synced.atualizadoEm <= local.atualizadoEm) return;
+      const quando = new Date(synced.atualizadoEm).toLocaleString('pt-BR');
+      banner.innerHTML = `
+        <div class="banner info" style="margin:0 0 16px;">
+          <span>🌐</span>
+          <div style="flex:1;">
+            <b>Encontramos uma versão mais recente pela internet</b> (salva em ${quando},
+            provavelmente do outro aparelho). Nada foi alterado ainda — escolha o que fazer:
+            <div style="display:flex; gap:10px; margin-top:10px;">
+              <button class="btn sm" onclick="Sync.usarVersaoGithub()">Usar versão da internet</button>
+              <button class="btn ghost sm" onclick="document.getElementById('syncBanner').innerHTML=''">Manter esta versão</button>
+            </div>
+          </div>
+        </div>`;
+    } catch (e) { /* falha silenciosa — não interrompe o uso normal do app */ }
+  },
+  async usarVersaoGithub() {
+    try {
+      const synced = await AppGithubSync.pull();
+      STATE = await AppStorage.unlockVaultFromRaw(this._githubPin, synced);
+      await AppStorage.adoptRaw(synced);
+      document.getElementById('syncBanner').innerHTML = '';
+      Nav.show('dashboard');
+    } catch (e) {
+      alert('Não foi possível carregar a versão da internet: ' + e.message);
+    }
+  },
+  async ativarGithub(token) {
+    await AppGithubSync.testToken(token);
+    // Envia os dados atuais na hora, pra já aparecer pro outro aparelho sem
+    // precisar esperar a próxima alteração.
+    const raw = await AppStorage.getRaw();
+    if (raw) await AppGithubSync.push(raw);
+    this.iniciarGithub(this._githubPin);
+  },
+  desativarGithub() {
+    AppGithubSync.desconectar();
+    if (this._githubInterval) { clearInterval(this._githubInterval); this._githubInterval = null; }
+    Nav.show('config');
+  },
+
+  // ---- Sincronização por login com Google (Firebase) ----
+  // Diferente da rede local e do GitHub (que checam de tempos em tempos),
+  // esta é em tempo real de verdade: o Firestore avisa sozinho assim que o
+  // outro aparelho salva algo, sem precisar esperar o próximo intervalo.
+  _googlePin: null,
+  _googlePendingRaw: null,
+  iniciarGoogleListener(pinUsado) {
+    this._googlePin = pinUsado;
+    if (!AppGoogleSync.isSignedIn()) return;
+    AppGoogleSync.startListening((synced) => this.onGoogleChange(synced));
+  },
+  async onGoogleChange(synced) {
+    const banner = document.getElementById('syncBanner');
+    if (!banner || !this._googlePin) return;
+    if (banner.innerHTML) return; // já tem um aviso na tela — não empilha
+    const local = await AppStorage.getRaw();
+    if (local && local.atualizadoEm && synced.atualizadoEm <= local.atualizadoEm) return;
+    this._googlePendingRaw = synced;
+    const quando = new Date(synced.atualizadoEm).toLocaleString('pt-BR');
+    banner.innerHTML = `
+      <div class="banner info" style="margin:0 0 16px;">
+        <span>🔵</span>
+        <div style="flex:1;">
+          <b>Encontramos uma versão mais recente na conta Google</b> (salva em ${quando},
+          provavelmente do outro aparelho). Nada foi alterado ainda — escolha o que fazer:
+          <div style="display:flex; gap:10px; margin-top:10px;">
+            <button class="btn sm" onclick="Sync.usarVersaoGoogle()">Usar versão da conta Google</button>
+            <button class="btn ghost sm" onclick="document.getElementById('syncBanner').innerHTML=''">Manter esta versão</button>
+          </div>
+        </div>
+      </div>`;
+  },
+  async usarVersaoGoogle() {
+    try {
+      const synced = this._googlePendingRaw || await AppGoogleSync.pull();
+      STATE = await AppStorage.unlockVaultFromRaw(this._googlePin, synced);
+      await AppStorage.adoptRaw(synced);
+      document.getElementById('syncBanner').innerHTML = '';
+      Nav.show('dashboard');
+    } catch (e) {
+      alert('Não foi possível carregar a versão da conta Google: ' + e.message);
+    }
+  },
+  async ativarGoogle() {
+    await AppGoogleSync.signIn();
+    const raw = await AppStorage.getRaw();
+    if (raw) await AppGoogleSync.push(raw);
+    this.iniciarGoogleListener(this._googlePin);
+  },
+  async desativarGoogle() {
+    await AppGoogleSync.signOutUser();
+    this._googlePin = null;
+    Nav.show('config');
   },
 
   async ativar() {
