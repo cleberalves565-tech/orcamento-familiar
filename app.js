@@ -928,10 +928,10 @@ const Render = {
         <div class="tab ${this.cartoesFiltroMeses==='todos'?'active':''}" onclick="Render.setCartoesFiltro('todos')">Todo o período</div>
       </div>
       <div class="card">
-        <div class="bars" style="height:130px;">
+        <div class="bars" style="height:150px;">
           ${comprometido.map(c => `<div class="bar-col">
             <div class="bar-value">${fmtMoeda(c.valor)}</div>
-            <div class="bar" style="height:${Math.max(4, Math.round((c.valor / maxComprometido) * 100))}%; background:var(--accent)"></div>
+            <div class="bar" style="height:${Math.max(4, Math.round((c.valor / maxComprometido) * 75))}%; background:var(--accent)"></div>
             <div class="bar-label">${String(c.mes).padStart(2,'0')}/${String(c.ano).slice(2)}</div>
           </div>`).join('') || '<div class="stat-sub">Nenhuma parcela cadastrada ainda.</div>'}
         </div>
