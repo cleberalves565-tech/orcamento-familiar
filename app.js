@@ -681,6 +681,67 @@ function totalParcelasPorMes() {
   });
 }
 
+// ---------------- Chat IA ----------------
+// Histórico da conversa fica só em memória (nunca é salvo nem sincronizado) — cada pergunta
+// manda para o servidor apenas um resumo dos dados financeiros do mês atual, montado aqui.
+let CHAT_HISTORICO = [];
+
+function montarContextoChatIA() {
+  const { ano, mes } = VIEW;
+  const linhasOrc = AppLogic.calcularOrcadoRealizado(STATE.lancamentos, STATE.orcamentos, ano, mes, STATE.parcelas);
+  const cartoes = STATE.cartoes.map(c => {
+    const parcelasCartao = STATE.parcelas.filter(p => p.carteiraId === c.id);
+    const fatura = AppLogic.calcularFaturaCartao(parcelasCartao, ano, mes);
+    return { nome: c.nome, faturaDoMes: fatura.total, fechaDia: c.diaFechamento, venceDia: c.diaVencimento };
+  });
+  const contas = STATE.contas.map(c => ({
+    nome: c.nome,
+    saldo: AppLogic.reais(AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0))),
+  }));
+
+  const base = {
+    mesReferencia: MESES_NOMES[mes] + '/' + ano,
+    saldoTotalContas: saldoTotalContas(),
+    contas,
+    receitasDoMes: totalReceitasMes(ano, mes),
+    despesasDoMes: totalDespesasMes(ano, mes),
+    orcamentoPorSubcategoria: linhasOrc.map(l => ({
+      categoria: categoriaNome(l.categoriaId), subcategoria: subcategoriaNome(l.subcategoriaId),
+      orcado: l.orcado, realizado: l.realizado, percentualDoOrcado: l.pct, status: l.status,
+    })),
+    cartoesDeCredito: cartoes,
+  };
+
+  if (STATE.config.modoAgregado) return base; // só totais — sem descrições individuais
+
+  base.transacoesDoMes = itensDoMes(ano, mes).slice(0, 150).map(i => ({
+    data: i.data, descricao: i.descricao, valor: i.valor, tipo: i.tipo,
+    categoria: categoriaNome(i.categoriaId), subcategoria: subcategoriaNome(i.subcategoriaId),
+  }));
+  return base;
+}
+
+const ChatIA = {
+  async enviar(pergunta) {
+    CHAT_HISTORICO.push({ autor: 'usuario', texto: pergunta });
+    Render.render_chatia();
+    const contexto = montarContextoChatIA();
+    try {
+      const resp = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pergunta, contexto }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      CHAT_HISTORICO.push({ autor: 'ia', texto: (data && (data.resposta || data.erro)) || 'Não consegui obter resposta agora. Tente de novo em instantes.' });
+    } catch (e) {
+      CHAT_HISTORICO.push({ autor: 'ia', texto: 'Erro de conexão ao consultar a IA. Tente novamente.' });
+    }
+    Render.render_chatia();
+  },
+  limparHistorico() { CHAT_HISTORICO = []; Render.render_chatia(); },
+};
+
 // ---------------- Conferência: pago x fatura, por cartão ----------------
 // Descobre a qual cartão um lançamento "💳Pagamento de Fatura" se refere. Lançamentos novos guardam isso
 // explicitamente (cartaoFaturaId, escolhido no formulário). Lançamentos antigos (importados da planilha) não
@@ -1121,11 +1182,24 @@ const Render = {
       ${ativo ? `
       <div class="row" style="border:none; margin-bottom:14px;"><div><div class="row-title">Modo agregado</div><div class="row-sub">Enviar apenas totais por categoria, sem descrições individuais</div></div>
         <div class="toggle ${STATE.config.modoAgregado ? 'on' : ''}" onclick="Actions.toggleModoAgregado()"><div class="knob"></div></div></div>
+      <div class="card" style="display:flex; flex-direction:column; height:420px;">
+        <div id="chatMensagens" style="flex:1; overflow-y:auto; margin-bottom:10px; display:flex; flex-direction:column; gap:10px;">
+          ${CHAT_HISTORICO.length === 0
+            ? '<div class="stat-sub">Pergunte algo sobre seu orçamento — ex.: "quanto gastei em mercado este mês?" ou "minha fatura do BB já bateu?"</div>'
+            : CHAT_HISTORICO.map(m => `<div style="align-self:${m.autor === 'usuario' ? 'flex-end' : 'flex-start'}; max-width:82%; background:${m.autor === 'usuario' ? 'var(--accent)' : 'var(--card2)'}; color:${m.autor === 'usuario' ? '#fff' : 'var(--text)'}; padding:8px 12px; border-radius:10px; font-size:13.5px; white-space:pre-wrap;">${m.texto}</div>`).join('')}
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input id="chatInput" placeholder="Digite sua pergunta..." style="flex:1;" onkeydown="if (event.key === 'Enter') Actions.enviarChatIA();">
+          <button class="btn" onclick="Actions.enviarChatIA()">Enviar</button>
+        </div>
+      </div>
+      ${CHAT_HISTORICO.length ? '<button class="btn ghost sm" style="margin-top:10px;" onclick="ChatIA.limparHistorico()">Limpar conversa</button>' : ''}
+      <div class="logic-note" style="margin-top:10px;"><span>ℹ️</span><div>${STATE.config.modoAgregado ? 'Modo agregado: só totais por categoria são enviados junto da pergunta.' : 'Modo detalhado: as descrições e valores das transações deste mês são enviados junto da pergunta.'} A conversa não é salva nem sincronizada — fica só nesta sessão, some ao recarregar.</div></div>
+      ` : `
       <div class="card" style="border-color:#5c3a12;">
-        <div class="row-title" style="margin-bottom:8px;">📤 Este recurso ainda não envia dados de verdade nesta versão</div>
-        <div class="stat-sub">Módulo isolado reservado para a Fase 7 do plano — a interface de consentimento já está pronta, a integração com a API é feita depois, com sua aprovação explícita de cada envio.</div>
-      </div>` : ''}
-      <div class="logic-note"><span>ℹ️</span><div>Nada é enviado até você confirmar, depois de ver exatamente o que seria compartilhado.</div></div>`;
+        <div class="row-title" style="margin-bottom:8px;">💬 Ative para começar a conversar</div>
+        <div class="stat-sub">Depois de ativado, você escolhe entre modo agregado (mais privado, só totais) ou detalhado (mais preciso, inclui descrições das transações do mês).</div>
+      </div>`}`;
   },
 
   render_config() {
@@ -1686,6 +1760,16 @@ const Actions = {
   },
   async toggleChatIA() { STATE.config.chatIA = !STATE.config.chatIA; await persist(); Nav.show('chatia'); },
   async toggleModoAgregado() { STATE.config.modoAgregado = !STATE.config.modoAgregado; await persist(); Nav.show('chatia'); },
+  async enviarChatIA() {
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    const pergunta = input.value.trim();
+    if (!pergunta) return;
+    input.value = '';
+    await ChatIA.enviar(pergunta);
+    const box = document.getElementById('chatMensagens');
+    if (box) box.scrollTop = box.scrollHeight;
+  },
   async setBloqueio(min) { STATE.config.bloqueioMin = Number(min); await persist(); Auth.resetInactivity(); },
 
   exportarCSV(escopo) {
