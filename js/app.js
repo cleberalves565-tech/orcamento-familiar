@@ -600,7 +600,7 @@ function itensTodoPeriodo() {
       categoriaId: l.categoriaId, subcategoriaId: l.subcategoriaId, descricao: l.descricao,
       valor: l.valor, formaPagamento: l.formaPagamento, carteiraId: l.carteiraId,
       isParcela: false, numero: null, qtd: null,
-      transferencia: AppLogic.isTransferenciaFatura(l),
+      transferencia: AppLogic.isTransferenciaInterna(l),
     });
   });
   STATE.parcelas.forEach(p => {
@@ -624,7 +624,7 @@ function itensDoMes(ano, mes) {
   return itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m === mes; });
 }
 function totalReceitasMes(ano, mes) {
-  return AppLogic.reais(itensDoMes(ano, mes).filter(i => i.tipo === 'Receita').reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
+  return AppLogic.reais(itensDoMes(ano, mes).filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalDespesasMes(ano, mes) {
   return AppLogic.reais(itensDoMes(ano, mes)
@@ -667,13 +667,13 @@ function mesesComMovimento() {
 }
 
 function totalReceitasAcumuladoAno(ano, ateMes) {
-  return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Receita'; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
+  return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Receita' && !i.transferencia; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalDespesasAcumuladoAno(ano, ateMes) {
   return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Despesa' && !i.transferencia; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalReceitasTodoPeriodo() {
-  return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Receita').reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
+  return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalDespesasTodoPeriodo() {
   return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Despesa' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));

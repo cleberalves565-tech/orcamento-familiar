@@ -34,6 +34,24 @@ const AppLogic = (function () {
     return lancamento.categoriaId === CATEGORIA_PAGAMENTO_FATURA;
   }
 
+  // Categoria/subcategoria fixas usadas nos lançamentos de aporte/resgate de CDB (💰Investimento >
+  // 🏛Renda Fixa) e no saldo inicial importado (💵Ganhos > 💲Saldo). Nenhuma das duas é "receita" ou
+  // "despesa" de verdade — é dinheiro seu mudando de lugar (conta corrente ⇄ investimento) ou o ponto
+  // de partida do histórico. O RENDIMENTO em si (💵Ganhos > 💸Investimento) continua contando normal,
+  // porque isso é ganho real. Usado nos relatórios de fluxo de caixa (Painel geral e Relatórios) para
+  // não inflar "Receitas/Despesas do mês" nem distorcer a evolução e o saldo acumulado.
+  const CATEGORIA_INVESTIMENTO_APORTE = 5;
+  const SUBCATEGORIA_RENDA_FIXA = 713;
+  const CATEGORIA_GANHOS = 7;
+  const SUBCATEGORIA_SALDO_INICIAL = 723;
+
+  function isTransferenciaInterna(lancamento) {
+    if (isTransferenciaFatura(lancamento)) return true;
+    if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE && lancamento.subcategoriaId === SUBCATEGORIA_RENDA_FIXA) return true;
+    if (lancamento.categoriaId === CATEGORIA_GANHOS && lancamento.subcategoriaId === SUBCATEGORIA_SALDO_INICIAL) return true;
+    return false;
+  }
+
   function calcularFaturaCartao(parcelasDoCartao, ano, mes) {
     const doMes = parcelasDoCartao.filter(p => p.ano === ano && p.mes === mes);
     const total = reais(doMes.reduce((s, p) => s + centavos(p.valor), 0));
@@ -92,7 +110,7 @@ const AppLogic = (function () {
   }
 
   return {
-    centavos, reais, gerarParcelas, isTransferenciaFatura,
+    centavos, reais, gerarParcelas, isTransferenciaFatura, isTransferenciaInterna,
     calcularFaturaCartao, calcularSaldoConta, calcularOrcadoRealizado, detectarEstouros,
     CATEGORIA_PAGAMENTO_FATURA,
   };
