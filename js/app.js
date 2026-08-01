@@ -623,8 +623,22 @@ function itensTodoPeriodo() {
 function itensDoMes(ano, mes) {
   return itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m === mes; });
 }
+// Quando o rendimento do CDB (Ganhos > Investimento) chega e, no mesmo período, é reaplicado
+// (Investimento > Renda Fixa — já fora das despesas), esse dinheiro nunca ficou disponível de
+// verdade. Por isso a parte "casada" (o menor dos dois valores no período) também sai do total de
+// receitas — só o que sobrou como caixa de fato continua contando. Decisão tomada em conversa:
+// Saldo líquido/Economia do mês devem refletir só dinheiro que realmente ficou disponível.
+function rendimentoCDBReaplicadoNoPeriodo(itens) {
+  const rendimento = itens.filter(i => i.tipo === 'Receita' && i.categoriaId === 7 && i.subcategoriaId === 735)
+    .reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
+  const reaplicado = itens.filter(i => i.tipo === 'Despesa' && i.categoriaId === 5 && i.subcategoriaId === 713)
+    .reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
+  return Math.min(rendimento, reaplicado);
+}
 function totalReceitasMes(ano, mes) {
-  return AppLogic.reais(itensDoMes(ano, mes).filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
+  const itens = itensDoMes(ano, mes);
+  const base = itens.filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
+  return AppLogic.reais(base - rendimentoCDBReaplicadoNoPeriodo(itens));
 }
 function totalDespesasMes(ano, mes) {
   return AppLogic.reais(itensDoMes(ano, mes)
@@ -667,13 +681,17 @@ function mesesComMovimento() {
 }
 
 function totalReceitasAcumuladoAno(ano, ateMes) {
-  return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Receita' && !i.transferencia; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
+  const itens = itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes; });
+  const base = itens.filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
+  return AppLogic.reais(base - rendimentoCDBReaplicadoNoPeriodo(itens));
 }
 function totalDespesasAcumuladoAno(ano, ateMes) {
   return AppLogic.reais(itensTodoPeriodo().filter(i => { const [y, m] = i.data.split('-').map(Number); return y === ano && m <= ateMes && i.tipo === 'Despesa' && !i.transferencia; }).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
 function totalReceitasTodoPeriodo() {
-  return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
+  const itens = itensTodoPeriodo();
+  const base = itens.filter(i => i.tipo === 'Receita' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
+  return AppLogic.reais(base - rendimentoCDBReaplicadoNoPeriodo(itens));
 }
 function totalDespesasTodoPeriodo() {
   return AppLogic.reais(itensTodoPeriodo().filter(i => i.tipo === 'Despesa' && !i.transferencia).reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
