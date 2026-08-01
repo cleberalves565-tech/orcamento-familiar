@@ -611,7 +611,7 @@ function itensTodoPeriodo() {
     const dia = cartao ? Math.min(cartao.diaVencimento, 28) : 1;
     const dataSint = p.ano + '-' + String(p.mes).padStart(2, '0') + '-' + String(dia).padStart(2, '0');
     itens.push({
-      id: p.id, lancamentoId: l.id, tipo: l.tipo, data: dataSint,
+      id: p.id, lancamentoId: l.id, tipo: l.tipo, data: dataSint, dataCompra: l.data,
       categoriaId: p.categoriaId, subcategoriaId: p.subcategoriaId, descricao: l.descricao,
       valor: p.valor, formaPagamento: 'Cartão de Crédito', carteiraId: p.carteiraId,
       isParcela: true, numero: p.numero, qtd: p.qtd,
@@ -834,7 +834,7 @@ const Render = {
         return !termo || l.descricao.toLowerCase().includes(termo);
       }).map(l => {
         const transferencia = l.transferencia;
-        return `<div class="row" style="cursor:pointer;" onclick="Modals.openEditarTransacao('${l.lancamentoId}')"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}${l.isParcela && l.qtd > 1 ? ' (parcela ' + l.numero + '/' + l.qtd + ')' : ''}</div><div class="row-sub">${fmtData(l.data)} · ${transferencia ? 'Transferência (não é despesa nova)' : categoriaNome(l.categoriaId) + ' · ' + contaOuCartaoNome(l.carteiraId)}</div></div></div>
+        return `<div class="row" style="cursor:pointer;" onclick="Modals.openEditarTransacao('${l.lancamentoId}')"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}${l.isParcela && l.qtd > 1 ? ' (parcela ' + l.numero + '/' + l.qtd + ')' : ''}</div><div class="row-sub">${fmtData(l.dataCompra || l.data)}${l.isParcela ? ' (compra)' : ''} · ${transferencia ? 'Transferência (não é despesa nova)' : categoriaNome(l.categoriaId) + ' · ' + contaOuCartaoNome(l.carteiraId)}</div></div></div>
         <div class="row-value ${transferencia ? '' : (l.tipo === 'Receita' ? 'up' : 'down')}" style="${transferencia ? 'color:var(--text2)' : ''}">${transferencia ? '' : (l.tipo === 'Receita' ? '+' : '-')}${fmtMoeda(l.valor)}</div></div>`;
       }).join('') || '<div class="stat-sub">Nenhuma transação neste mês.</div>'}
       </div>
