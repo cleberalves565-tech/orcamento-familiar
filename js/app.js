@@ -1175,7 +1175,8 @@ const Render = {
         <div class="stat-sub" style="margin-top:8px;">Barras vermelhas = despesa do mês. Toque em "Mensal" acima e use as setas para abrir um mês específico. Quer ver mais meses (passado ou futuro)? Escolha um período maior acima.</div>
       </div>
 
-      <div class="section-title">Saldo acumulado (receitas − despesas, mês a mês)</div>
+      <div class="section-title">Resultado acumulado da rotina (receitas − despesas, mês a mês)</div>
+      <div class="logic-note"><span>ℹ️</span><div>Isto <b>não é o saldo que você tem hoje, nem uma dívida</b> — é só a soma de quanto sua rotina (fora o que você já tinha guardado) poupou ou gastou a mais, mês a mês, desde ${meses.length ? MESES_NOMES[Number(meses[0].split('-')[1])] + '/' + meses[0].split('-')[0] : 'o início'}. Seu saldo real em contas hoje é <b>${fmtMoeda(saldoDisponivel() + saldoInvestido())}</b> (disponível + investido) — se o gráfico abaixo estiver negativo, significa que a rotina está consumindo aos poucos o que você já tinha guardado, não que falta dinheiro ou que é preciso buscar empréstimo.</div></div>
       <div class="card">
         <div class="bars-zero">
           ${janela.map(e => {
@@ -1189,7 +1190,7 @@ const Render = {
             </div>`;
           }).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo acumulado até aquele mês; abaixo = negativo (mesmo período selecionado acima). Saldo acumulado no último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b></div>
+        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = rotina com sobra acumulada até aquele mês; abaixo = rotina no vermelho acumulado (mesmo período selecionado acima). Resultado acumulado da rotina até o último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b> — compare sempre com o saldo real em contas no Painel geral, que é o número que importa para saber quanto dinheiro você tem de fato.</div>
       </div>
 
       <div class="section-title">Orçado x realizado por subcategoria (mês selecionado: ${MESES_NOMES[mes]}/${ano})</div>
