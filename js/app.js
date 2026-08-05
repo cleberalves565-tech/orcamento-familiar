@@ -1046,10 +1046,15 @@ const Render = {
     const totalAtual = AppLogic.reais(STATE.investimentos.reduce((s, i) => s + AppLogic.centavos(i.valorAtual), 0));
     const totalAportado = AppLogic.reais(STATE.investimentos.reduce((s, i) => s + AppLogic.centavos(i.valorAportado), 0));
 
-    const CATEGORIA_INVESTIMENTO = 5;
-    const lancsInv = STATE.lancamentos.filter(l => l.categoriaId === CATEGORIA_INVESTIMENTO);
-    const aportesFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
-    const recebidoFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+    // Base correta: lançamentos DA PRÓPRIA conta Investimento (não da categoria "Investimento" em
+    // qualquer conta). Uma transferência de aporte tem 2 pernas — saída na Conta Corrente e entrada na
+    // conta Investimento — e um resgate tem despesa na conta Investimento. Somar por categoria em todas
+    // as contas contava a mesma transferência pelos dois lados e tratava resgate como se fosse aporte,
+    // inflando o total. Assim o resumo bate exatamente com o saldo investido do Painel geral.
+    const contaInvestimento = STATE.contas.find(c => c.tipo === 'Investimento');
+    const lancsInv = contaInvestimento ? STATE.lancamentos.filter(l => l.carteiraId === contaInvestimento.id) : [];
+    const aportesFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
+    const recebidoFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
     const saldoFluxo = AppLogic.reais(AppLogic.centavos(aportesFluxo) - AppLogic.centavos(recebidoFluxo));
 
     el.innerHTML = `
@@ -1057,11 +1062,11 @@ const Render = {
 
       <div class="section-title">Resumo pelo fluxo de caixa (automático, a partir dos seus lançamentos)</div>
       <div class="grid grid-3">
-        <div class="card"><div class="stat-label">Total aportado (despesas)</div><div class="stat-value down">${fmtMoeda(aportesFluxo)}</div><div class="stat-sub">${lancsInv.filter(l=>l.tipo==='Despesa').length} lançamentos</div></div>
-        <div class="card"><div class="stat-label">Recebido em rendimentos/retiradas</div><div class="stat-value up">${fmtMoeda(recebidoFluxo)}</div><div class="stat-sub">${lancsInv.filter(l=>l.tipo==='Receita').length} lançamentos</div></div>
-        <div class="card"><div class="stat-label">Saldo líquido investido</div><div class="stat-value">${fmtMoeda(saldoFluxo)}</div><div class="stat-sub">aportado − recebido de volta</div></div>
+        <div class="card"><div class="stat-label">Total aportado (entradas na conta Investimento)</div><div class="stat-value up">${fmtMoeda(aportesFluxo)}</div><div class="stat-sub">${lancsInv.filter(l=>l.tipo==='Receita').length} lançamentos</div></div>
+        <div class="card"><div class="stat-label">Total resgatado (saídas da conta Investimento)</div><div class="stat-value down">${fmtMoeda(recebidoFluxo)}</div><div class="stat-sub">${lancsInv.filter(l=>l.tipo==='Despesa').length} lançamentos</div></div>
+        <div class="card"><div class="stat-label">Saldo líquido investido</div><div class="stat-value">${fmtMoeda(saldoFluxo)}</div><div class="stat-sub">aportado − resgatado (bate com o Painel geral)</div></div>
       </div>
-      <div class="logic-note"><span>ℹ️</span><div>Este resumo é calculado automaticamente a partir dos lançamentos que você já faz na categoria "Investimento" (aporte = despesa, rendimento ou retirada = receita) — nada para digitar de novo aqui. Ele mostra <b>quanto dinheiro saiu e voltou da sua conta</b>, não o valor de mercado atual do investimento (isso nenhum app descobre sozinho — só seu extrato do banco sabe).</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Este resumo é calculado automaticamente a partir dos lançamentos feitos <b>na própria conta Investimento</b> (entrada = aporte/reaplicação/saldo inicial, saída = resgate) — nada para digitar de novo aqui. Ele mostra <b>quanto dinheiro entrou e saiu dessa conta</b>, não o valor de mercado atual do investimento (isso nenhum app descobre sozinho — só seu extrato do banco sabe).</div></div>
 
       <div class="section-title">Seus ativos (cadastro manual, para acompanhar valor de mercado)</div>
       <div class="grid grid-4">
