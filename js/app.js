@@ -1134,11 +1134,26 @@ const Render = {
     // pagamento de fatura (não vencimento de parcela) e inclui o saldo inicial. Este SIM bate com o
     // que aparece no Painel geral no mês corrente, porque é exatamente a mesma conta. Anexado direto
     // nos mesmos objetos de "acumulado" (não um array novo) para que a janela abaixo já venha com ele.
-    const hojeISO = new Date().toISOString().slice(0, 10);
+    // Meses FUTUROS não ficam mais travados no valor de hoje: a partir do mês corrente, cada mês
+    // seguinte desconta o que já está comprometido no cartão (parcela já agendada = e.despesa, que
+    // para mês futuro é só isso mesmo, não tem outro lançamento real ainda). Não soma nenhuma receita
+    // futura de propósito — é o cenário conservador, "se nada mais entrar, até onde aguento".
+    const hoje = new Date();
+    const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+    const hojeISO = hoje.toISOString().slice(0, 10);
+    let saldoProjetadoRunning = null;
     for (const e of acumulado) {
-      const fimDoMes = e.chave + '-31';
-      const cortarEm = fimDoMes > hojeISO ? hojeISO : fimDoMes;
-      e.saldoReal = saldoDisponivelAteData(cortarEm);
+      if (e.chave <= chaveHoje) {
+        const fimDoMes = e.chave + '-31';
+        const cortarEm = fimDoMes > hojeISO ? hojeISO : fimDoMes;
+        e.saldoReal = saldoDisponivelAteData(cortarEm);
+        e.projetado = false;
+        saldoProjetadoRunning = e.saldoReal;
+      } else {
+        saldoProjetadoRunning = AppLogic.reais(AppLogic.centavos(saldoProjetadoRunning) - AppLogic.centavos(e.despesa));
+        e.saldoReal = saldoProjetadoRunning;
+        e.projetado = true;
+      }
     }
 
     // Janela de exibição dos dois gráficos abaixo — evita dezenas de barras espremidas no quadro.
@@ -1147,8 +1162,6 @@ const Render = {
     const janelaN = this.relatorioJanela;
     let janela = acumulado;
     if (janelaN !== 'todos' && acumulado.length > janelaN) {
-      const hoje = new Date();
-      const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
       const idxHoje = acumulado.findIndex(e => e.chave >= chaveHoje);
       const centro = idxHoje === -1 ? acumulado.length : idxHoje;
       let ini = Math.max(0, centro - Math.ceil(janelaN / 2));
@@ -1157,7 +1170,6 @@ const Render = {
       janela = acumulado.slice(ini, fim);
     }
     const maxVal = Math.max(1, ...janela.map(e => Math.max(e.receita, e.despesa)));
-    const maxAcum = Math.max(1, ...janela.map(e => Math.abs(e.acumulado)));
     const maxSaldoReal = Math.max(1, ...janela.map(e => Math.abs(e.saldoReal)));
 
     el.innerHTML = `
@@ -1197,40 +1209,25 @@ const Render = {
         <div class="stat-sub" style="margin-top:8px;">Barras vermelhas = despesa do mês. Toque em "Mensal" acima e use as setas para abrir um mês específico. Quer ver mais meses (passado ou futuro)? Escolha um período maior acima.</div>
       </div>
 
-      <div class="section-title">Evolução do saldo real em contas (fim de cada mês)</div>
-      <div class="logic-note"><span>ℹ️</span><div>Este É o saldo de verdade — disponível (Conta Corrente + PIX + Dinheiro), dia a dia, com o estoque inicial incluído e a fatura contada só quando é paga. A barra do mês corrente bate exatamente com "Saldo disponível" no Painel geral hoje: <b>${fmtMoeda(saldoDisponivel())}</b>. Meses futuros ficam travados nesse mesmo valor porque nenhum dinheiro mudou de mão ainda (só existe parcela agendada).</div></div>
+      <div class="section-title">Evolução e projeção do saldo real em contas (fim de cada mês)</div>
+      <div class="logic-note"><span>ℹ️</span><div>Até ${MESES_NOMES[hoje.getMonth()+1]}/${hoje.getFullYear()} (mês atual), as barras são o saldo de verdade — disponível (Conta Corrente + PIX + Dinheiro), com o estoque inicial incluído e a fatura contada só quando é paga. Bate exatamente com "Saldo disponível" no Painel geral hoje: <b>${fmtMoeda(saldoDisponivel())}</b>. As barras <b>mais claras, marcadas "proj."</b>, são projeção: partem desse saldo real e só descontam as parcelas de cartão já comprometidas — <b>não somam nenhum salário ou receita futura</b> de propósito, para mostrar o cenário mais conservador possível: se nada mais entrar, é até aqui que o dinheiro aguenta.</div></div>
       <div class="card">
         <div class="bars-zero">
           ${janela.map(e => {
             const isPos = e.saldoReal >= 0;
             const pct = Math.max(4, Math.round((Math.abs(e.saldoReal) / maxSaldoReal) * 100));
+            const corPos = e.projetado ? '#7fd88f' : 'var(--green)';
+            const corNeg = e.projetado ? '#f0a06b' : 'var(--red)';
+            const opacidade = e.projetado ? 'opacity:0.75; border:1px dashed rgba(255,255,255,0.3);' : '';
             return `<div class="bar-col-zero">
-              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(e.saldoReal)}</div><div class="bar-d" style="height:${pct}%; background:var(--green)"></div>` : ''}</div>
+              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(e.saldoReal)}</div><div class="bar-d" style="height:${pct}%; background:${corPos}; ${opacidade}"></div>` : ''}</div>
               <div class="bar-zero-axis"></div>
-              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--red)"></div><div class="bar-value">${fmtMoeda(e.saldoReal)}</div>` : ''}</div>
-              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)}</div>
+              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:${corNeg}; ${opacidade}"></div><div class="bar-value">${fmtMoeda(e.saldoReal)}</div>` : ''}</div>
+              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)}${e.projetado ? ' (proj.)' : ''}</div>
             </div>`;
           }).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo naquele mês; abaixo = conta no vermelho de verdade (cheque especial) naquele mês. Isto é o número que responde "eu estava no vermelho?".</div>
-      </div>
-
-      <div class="section-title">Resultado acumulado da rotina (receitas − despesas, mês a mês)</div>
-      <div class="logic-note"><span>ℹ️</span><div>Isto <b>não é o saldo que você tem hoje, nem uma dívida</b> — é uma métrica diferente, só para acompanhar disciplina: quanto sua rotina (fora o que você já tinha guardado) poupou ou gastou a mais, mês a mês, desde ${meses.length ? MESES_NOMES[Number(meses[0].split('-')[1])] + '/' + meses[0].split('-')[0] : 'o início'}. Para saber se você esteve ou não no vermelho de verdade, use o gráfico <b>acima</b> ("Evolução do saldo real em contas") — este aqui pode ficar negativo mesmo com saldo real positivo, porque ele não conta o estoque inicial nem quando a fatura foi paga de fato.</div></div>
-      <div class="card">
-        <div class="bars-zero">
-          ${janela.map(e => {
-            const isPos = e.acumulado >= 0;
-            const pct = Math.max(4, Math.round((Math.abs(e.acumulado) / maxAcum) * 100));
-            return `<div class="bar-col-zero">
-              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(e.acumulado)}</div><div class="bar-d" style="height:${pct}%; background:var(--green)"></div>` : ''}</div>
-              <div class="bar-zero-axis"></div>
-              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--red)"></div><div class="bar-value">${fmtMoeda(e.acumulado)}</div>` : ''}</div>
-              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)}</div>
-            </div>`;
-          }).join('')}
-        </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = rotina com sobra acumulada até aquele mês; abaixo = rotina no vermelho acumulado (mesmo período selecionado acima). Resultado acumulado da rotina até o último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b>.</div>
+        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo; abaixo = conta no vermelho de verdade (cheque especial). Barras "(proj.)" são estimativa conservadora (sem receita futura) — se ficarem negativas, é um alerta para planejar, não um fato consumado.</div>
       </div>
 
       <div class="section-title">Orçado x realizado por subcategoria (mês selecionado: ${MESES_NOMES[mes]}/${ano})</div>
