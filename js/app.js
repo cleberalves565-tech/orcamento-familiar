@@ -1003,36 +1003,43 @@ const Render = {
     const linhas = AppLogic.calcularOrcadoRealizado(STATE.lancamentos, STATE.orcamentos, ano, mes, STATE.parcelas);
     const porCategoria = {};
     linhas.forEach(l => {
-      porCategoria[l.categoriaId] = porCategoria[l.categoriaId] || { orcado: 0, realizado: 0, subs: [] };
+      porCategoria[l.categoriaId] = porCategoria[l.categoriaId] || { orcado: 0, realizado: 0, subs: [], tipo: l.tipo };
       porCategoria[l.categoriaId].orcado += AppLogic.centavos(l.orcado);
       porCategoria[l.categoriaId].realizado += AppLogic.centavos(l.realizado);
       porCategoria[l.categoriaId].subs.push(l);
     });
     const estourados = linhas.filter(l => l.status === 'estourado');
+    function corDoStatus(status) {
+      return status === 'estourado' ? 'var(--red)' : (status === 'atencao' ? 'var(--amber)' : 'var(--green)');
+    }
     el.innerHTML = `
       <div class="topbar"><h1>Orçamentos</h1>${mesNavHtml()}</div>
       ${estourados.length ? `<div class="banner warn"><span>⚠️</span><div><b>${estourados.length} subcategoria(s) estouraram o orçamento este mês:</b> ${estourados.map(e => subcategoriaNome(e.subcategoriaId) + ' (' + e.pct + '%)').join(', ')}. Veja o relatório completo em Relatórios.</div></div>` : ''}
       <div class="card">
         ${Object.entries(porCategoria).map(([cid, agg]) => {
           const pct = agg.orcado > 0 ? Math.round((agg.realizado / agg.orcado) * 100) : 0;
-          const cor = pct > 100 ? 'var(--red)' : (pct >= 90 ? 'var(--amber)' : 'var(--green)');
+          // Para categoria de Receita (Ganhos), passar de 100% é bom — verde. Para Despesa, é o
+          // contrário. Mesma lógica usada por subcategoria em calcularOrcadoRealizado.
+          const status = agg.tipo === 'Receita' ? (pct >= 100 ? 'ok' : 'atencao') : (pct > 100 ? 'estourado' : (pct >= 90 ? 'atencao' : 'ok'));
+          const cor = corDoStatus(status);
+          const sufixo = agg.tipo === 'Receita' ? (pct >= 100 ? ' — meta batida' : '') : (pct > 100 ? ' — estourado' : '');
           const catId = Number(cid);
           return `<div class="row" style="cursor:pointer;" onclick="Modals.toggleOrc(${catId})">
             <div style="flex:1;">
               <div class="row-title">${CATEGORIA_ICONS[catId] || ''} ${categoriaNome(catId)} <span id="arrow-${catId}" style="color:var(--text3); font-size:11px;">▸ ver subcategorias</span></div>
               <div class="progress"><div class="progress-fill" style="width:${Math.min(pct,100)}%; background:${cor}"></div></div>
-              <div class="stat-sub" style="margin-top:5px;">Realizado ${fmtMoeda(agg.realizado/100)} de ${fmtMoeda(agg.orcado/100)} orçado (${pct}%)${pct>100?' — estourado':''}</div>
+              <div class="stat-sub" style="margin-top:5px;">Realizado ${fmtMoeda(agg.realizado/100)} de ${fmtMoeda(agg.orcado/100)} orçado (${pct}%)${sufixo}</div>
             </div></div>
           <div id="orc-${catId}" style="display:none; margin:2px 0 6px; border-left:2px solid var(--border); padding-left:2px;">
             ${agg.subs.map(s => `<div class="row" style="padding:8px 0 8px 14px;"><div style="flex:1;">
               <div class="row-sub" style="margin-bottom:4px;">${subcategoriaNome(s.subcategoriaId)}</div>
-              <div class="progress" style="height:6px;"><div class="progress-fill" style="width:${Math.min(s.pct,100)}%; background:${s.status==='estourado'?'var(--red)':(s.status==='atencao'?'var(--amber)':'var(--green)')}"></div></div>
+              <div class="progress" style="height:6px;"><div class="progress-fill" style="width:${Math.min(s.pct,100)}%; background:${corDoStatus(s.status)}"></div></div>
               <div class="stat-sub" style="margin-top:4px;">${fmtMoeda(s.realizado)} de ${fmtMoeda(s.orcado)} orçado (${s.pct}%)</div>
             </div></div>`).join('')}
           </div>`;
         }).join('') || '<div class="stat-sub">Nenhum orçamento definido para este mês.</div>'}
       </div>
-      <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem.</div></div>`;
+      <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem. Em categorias de receita (Ganhos), passar de 100% é positivo — por isso aparece em verde.</div></div>`;
   },
 
   render_metas() {

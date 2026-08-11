@@ -106,10 +106,16 @@ const AppLogic = (function () {
       const realizadoCents = mapaCerto[chave] || 0;
       const orcadoCents = centavos(o.valorOrcado);
       const pct = orcadoCents > 0 ? Math.round((realizadoCents / orcadoCents) * 100) : (realizadoCents > 0 ? 999 : 0);
+      // Para Despesa, passar de 100% é ruim (gastou mais do que devia) — vermelho/"estourado". Para
+      // Receita, é o oposto: passar de 100% é bom (ganhou mais do que esperava) — verde. Uma Receita
+      // nunca fica "estourada" (não faz sentido "estourar" uma meta de ganho) — no máximo fica "atencao"
+      // (ainda não bateu a meta), o que também a mantém fora do banner de "estouraram o orçamento".
+      const status = o.tipo === 'Receita'
+        ? (pct >= 100 ? 'ok' : 'atencao')
+        : (pct > 100 ? 'estourado' : (pct >= 90 ? 'atencao' : 'ok'));
       linhas.push({
-        categoriaId: o.categoriaId, subcategoriaId: o.subcategoriaId,
-        orcado: reais(orcadoCents), realizado: reais(realizadoCents), pct,
-        status: pct > 100 ? 'estourado' : (pct >= 90 ? 'atencao' : 'ok'),
+        categoriaId: o.categoriaId, subcategoriaId: o.subcategoriaId, tipo: o.tipo,
+        orcado: reais(orcadoCents), realizado: reais(realizadoCents), pct, status,
       });
     }
     return linhas.sort((a, b) => b.pct - a.pct);
