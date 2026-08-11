@@ -72,7 +72,12 @@ const AppLogic = (function () {
   }
 
   function calcularOrcadoRealizado(lancamentos, orcamentos, ano, mes, parcelas) {
+    // Cada orçamento tem tipo Despesa ou Receita (ex.: categoria "Ganhos" é orçamento de RECEITA —
+    // quanto você espera ganhar). Antes, esta função só somava despesas, então todo orçamento de
+    // Receita ficava travado em 0% de realizado mesmo com dinheiro entrando de verdade. Agora soma os
+    // dois lados separadamente e cada orçamento busca no lado certo, pelo seu próprio tipo.
     const realizadoPorChave = {};
+    const realizadoReceitaPorChave = {};
     if (parcelas && parcelas.length) {
       for (const p of parcelas) {
         if (p.ano !== ano || p.mes !== mes) continue;
@@ -82,18 +87,23 @@ const AppLogic = (function () {
       }
     }
     for (const l of lancamentos) {
-      if (l.tipo !== 'Despesa' || isTransferenciaFatura(l)) continue;
-      if (l.formaPagamento === 'Cartão de Crédito') continue;
       const [ly, lm] = l.data.split('-').map(Number);
       if (ly !== ano || lm !== mes) continue;
       const chave = l.categoriaId + '_' + l.subcategoriaId;
-      realizadoPorChave[chave] = (realizadoPorChave[chave] || 0) + centavos(l.valor);
+      if (l.tipo === 'Despesa') {
+        if (isTransferenciaFatura(l)) continue;
+        if (l.formaPagamento === 'Cartão de Crédito') continue;
+        realizadoPorChave[chave] = (realizadoPorChave[chave] || 0) + centavos(l.valor);
+      } else if (l.tipo === 'Receita') {
+        realizadoReceitaPorChave[chave] = (realizadoReceitaPorChave[chave] || 0) + centavos(l.valor);
+      }
     }
     const linhas = [];
     for (const o of orcamentos) {
       if (o.ano !== ano || o.mes !== mes) continue;
       const chave = o.categoriaId + '_' + o.subcategoriaId;
-      const realizadoCents = realizadoPorChave[chave] || 0;
+      const mapaCerto = o.tipo === 'Receita' ? realizadoReceitaPorChave : realizadoPorChave;
+      const realizadoCents = mapaCerto[chave] || 0;
       const orcadoCents = centavos(o.valorOrcado);
       const pct = orcadoCents > 0 ? Math.round((realizadoCents / orcadoCents) * 100) : (realizadoCents > 0 ? 999 : 0);
       linhas.push({
