@@ -659,6 +659,16 @@ function saldoInvestido() {
   return AppLogic.reais(STATE.contas.filter(c => c.tipo === 'Investimento')
     .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0)), 0));
 }
+// Saldo disponível de verdade (caixa real) na data em que ele estava, não hoje — usado para desenhar
+// a evolução do saldo real mês a mês em Relatórios. Filtra os lançamentos até a data-limite antes de
+// somar, então cada mês do gráfico mostra o saldo real "como se fosse hoje" naquele momento — a mesma
+// conta do Painel geral, só que no passado. Datas futuras (sem lançamento real, só parcela) ficam
+// travadas no saldo real mais recente, porque nenhum dinheiro mudou de mão ainda.
+function saldoDisponivelAteData(dataLimiteISO) {
+  const lancsAteData = STATE.lancamentos.filter(l => l.data <= dataLimiteISO);
+  return AppLogic.reais(STATE.contas.filter(c => c.tipo !== 'Investimento')
+    .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancsAteData) + (c.saldoInicial || 0)), 0));
+}
 
 function mesNavHtml() {
   const { ano, mes } = VIEW;
@@ -1120,6 +1130,17 @@ const Render = {
     let saldoAcum = 0;
     const acumulado = evolucao.map(e => { saldoAcum += (e.receita - e.despesa); return { ...e, acumulado: AppLogic.reais(AppLogic.centavos(saldoAcum)) }; });
 
+    // Saldo real (caixa) no fim de cada mês — diferente do "acumulado" acima porque usa data de
+    // pagamento de fatura (não vencimento de parcela) e inclui o saldo inicial. Este SIM bate com o
+    // que aparece no Painel geral no mês corrente, porque é exatamente a mesma conta. Anexado direto
+    // nos mesmos objetos de "acumulado" (não um array novo) para que a janela abaixo já venha com ele.
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    for (const e of acumulado) {
+      const fimDoMes = e.chave + '-31';
+      const cortarEm = fimDoMes > hojeISO ? hojeISO : fimDoMes;
+      e.saldoReal = saldoDisponivelAteData(cortarEm);
+    }
+
     // Janela de exibição dos dois gráficos abaixo — evita dezenas de barras espremidas no quadro.
     // Por padrão mostra uma janela centrada no mês atual (metade passado, metade futuro, quando existir
     // histórico/parcelamento futuro); "Todo o período" remove o corte.
@@ -1137,6 +1158,7 @@ const Render = {
     }
     const maxVal = Math.max(1, ...janela.map(e => Math.max(e.receita, e.despesa)));
     const maxAcum = Math.max(1, ...janela.map(e => Math.abs(e.acumulado)));
+    const maxSaldoReal = Math.max(1, ...janela.map(e => Math.abs(e.saldoReal)));
 
     el.innerHTML = `
       <div class="topbar"><h1>Relatórios</h1>${mesNavHtml()}</div>
@@ -1175,8 +1197,26 @@ const Render = {
         <div class="stat-sub" style="margin-top:8px;">Barras vermelhas = despesa do mês. Toque em "Mensal" acima e use as setas para abrir um mês específico. Quer ver mais meses (passado ou futuro)? Escolha um período maior acima.</div>
       </div>
 
+      <div class="section-title">Evolução do saldo real em contas (fim de cada mês)</div>
+      <div class="logic-note"><span>ℹ️</span><div>Este É o saldo de verdade — disponível (Conta Corrente + PIX + Dinheiro), dia a dia, com o estoque inicial incluído e a fatura contada só quando é paga. A barra do mês corrente bate exatamente com "Saldo disponível" no Painel geral hoje: <b>${fmtMoeda(saldoDisponivel())}</b>. Meses futuros ficam travados nesse mesmo valor porque nenhum dinheiro mudou de mão ainda (só existe parcela agendada).</div></div>
+      <div class="card">
+        <div class="bars-zero">
+          ${janela.map(e => {
+            const isPos = e.saldoReal >= 0;
+            const pct = Math.max(4, Math.round((Math.abs(e.saldoReal) / maxSaldoReal) * 100));
+            return `<div class="bar-col-zero">
+              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(e.saldoReal)}</div><div class="bar-d" style="height:${pct}%; background:var(--green)"></div>` : ''}</div>
+              <div class="bar-zero-axis"></div>
+              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--red)"></div><div class="bar-value">${fmtMoeda(e.saldoReal)}</div>` : ''}</div>
+              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo naquele mês; abaixo = conta no vermelho de verdade (cheque especial) naquele mês. Isto é o número que responde "eu estava no vermelho?".</div>
+      </div>
+
       <div class="section-title">Resultado acumulado da rotina (receitas − despesas, mês a mês)</div>
-      <div class="logic-note"><span>ℹ️</span><div>Isto <b>não é o saldo que você tem hoje, nem uma dívida</b> — é só a soma de quanto sua rotina (fora o que você já tinha guardado) poupou ou gastou a mais, mês a mês, desde ${meses.length ? MESES_NOMES[Number(meses[0].split('-')[1])] + '/' + meses[0].split('-')[0] : 'o início'}. Seu saldo real em contas hoje é <b>${fmtMoeda(saldoDisponivel() + saldoInvestido())}</b> (disponível + investido) — se o gráfico abaixo estiver negativo, significa que a rotina está consumindo aos poucos o que você já tinha guardado, não que falta dinheiro ou que é preciso buscar empréstimo.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Isto <b>não é o saldo que você tem hoje, nem uma dívida</b> — é uma métrica diferente, só para acompanhar disciplina: quanto sua rotina (fora o que você já tinha guardado) poupou ou gastou a mais, mês a mês, desde ${meses.length ? MESES_NOMES[Number(meses[0].split('-')[1])] + '/' + meses[0].split('-')[0] : 'o início'}. Para saber se você esteve ou não no vermelho de verdade, use o gráfico <b>acima</b> ("Evolução do saldo real em contas") — este aqui pode ficar negativo mesmo com saldo real positivo, porque ele não conta o estoque inicial nem quando a fatura foi paga de fato.</div></div>
       <div class="card">
         <div class="bars-zero">
           ${janela.map(e => {
@@ -1190,7 +1230,7 @@ const Render = {
             </div>`;
           }).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = rotina com sobra acumulada até aquele mês; abaixo = rotina no vermelho acumulado (mesmo período selecionado acima). Resultado acumulado da rotina até o último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b> — compare sempre com o saldo real em contas no Painel geral, que é o número que importa para saber quanto dinheiro você tem de fato.</div>
+        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = rotina com sobra acumulada até aquele mês; abaixo = rotina no vermelho acumulado (mesmo período selecionado acima). Resultado acumulado da rotina até o último mês do histórico: <b>${fmtMoeda(acumulado.length ? acumulado[acumulado.length-1].acumulado : 0)}</b>.</div>
       </div>
 
       <div class="section-title">Orçado x realizado por subcategoria (mês selecionado: ${MESES_NOMES[mes]}/${ano})</div>
