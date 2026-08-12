@@ -46,7 +46,7 @@ const AppLogic = (function () {
   // Renda Fixa do rendimento que já tinha sido contado como Receita e só está sendo reinvestido).
   // Para fluxo de caixa (Painel geral/Relatórios) ela tem que ser tratada exatamente como um aporte
   // normal: é transferência interna, não gasto novo.
-  const SUBCATEGORIA_REAPLICACAO_RENDIMENTO = 718;
+  const SUBCATEGORIA_REAPLICACAO_RENDIMENTO = 747;
   const CATEGORIA_GANHOS = 7;
   const SUBCATEGORIA_SALDO_INICIAL = 723;
 
