@@ -42,12 +42,18 @@ const AppLogic = (function () {
   // não inflar "Receitas/Despesas do mês" nem distorcer a evolução e o saldo acumulado.
   const CATEGORIA_INVESTIMENTO_APORTE = 5;
   const SUBCATEGORIA_RENDA_FIXA = 713;
+  // Reaplicação de rendimento (criada para separar, no Orçamentos, o dinheiro NOVO aportado em
+  // Renda Fixa do rendimento que já tinha sido contado como Receita e só está sendo reinvestido).
+  // Para fluxo de caixa (Painel geral/Relatórios) ela tem que ser tratada exatamente como um aporte
+  // normal: é transferência interna, não gasto novo.
+  const SUBCATEGORIA_REAPLICACAO_RENDIMENTO = 718;
   const CATEGORIA_GANHOS = 7;
   const SUBCATEGORIA_SALDO_INICIAL = 723;
 
   function isTransferenciaInterna(lancamento) {
     if (isTransferenciaFatura(lancamento)) return true;
-    if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE && lancamento.subcategoriaId === SUBCATEGORIA_RENDA_FIXA) return true;
+    if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE &&
+        (lancamento.subcategoriaId === SUBCATEGORIA_RENDA_FIXA || lancamento.subcategoriaId === SUBCATEGORIA_REAPLICACAO_RENDIMENTO)) return true;
     if (lancamento.categoriaId === CATEGORIA_GANHOS && lancamento.subcategoriaId === SUBCATEGORIA_SALDO_INICIAL) return true;
     return false;
   }
