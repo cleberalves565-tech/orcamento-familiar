@@ -13,6 +13,29 @@ function fmtData(iso) {
   const [y, m, d] = iso.split('-');
   return d + '/' + m;
 }
+// Velocímetro (arco semicircular) para um resumo geral orçado x realizado. Só usado como resumo
+// de UM número (ex.: total de despesa do mês) — não por categoria/subcategoria, porque com muitas
+// linhas lado a lado o ângulo do arco é mais difícil de comparar do que barras, e os outliers deste
+// orçamento (ex.: Renda Fixa em milhares de %) quebrariam a leitura visual de um mostrador com escala fixa.
+function velocimetroSVG(pct, cor, labelCentro, labelBaixo) {
+  const MAX_ESCALA = 150; // além disso o arco fica cheio, mas o texto continua mostrando o valor real
+  const fracao = Math.max(0, Math.min(pct, MAX_ESCALA)) / MAX_ESCALA;
+  const raio = 80, cx = 100, cy = 96, largura = 15;
+  const arcoTotal = Math.PI * raio;
+  const arcoPreenchido = arcoTotal * fracao;
+  // marcador na posição dos 100% (referência de "estourou")
+  const fracaoCem = Math.min(100, MAX_ESCALA) / MAX_ESCALA;
+  const anguloCem = Math.PI - Math.PI * fracaoCem;
+  const tickX1 = cx + (raio - largura / 2 - 4) * Math.cos(anguloCem), tickY1 = cy - (raio - largura / 2 - 4) * Math.sin(anguloCem);
+  const tickX2 = cx + (raio + largura / 2 + 4) * Math.cos(anguloCem), tickY2 = cy - (raio + largura / 2 + 4) * Math.sin(anguloCem);
+  return `<svg viewBox="0 0 200 118" style="width:100%; max-width:280px; display:block; margin:0 auto;">
+    <path d="M ${cx - raio} ${cy} A ${raio} ${raio} 0 0 1 ${cx + raio} ${cy}" fill="none" stroke="var(--card2)" stroke-width="${largura}" stroke-linecap="round"/>
+    <path d="M ${cx - raio} ${cy} A ${raio} ${raio} 0 0 1 ${cx + raio} ${cy}" fill="none" stroke="${cor}" stroke-width="${largura}" stroke-linecap="round" stroke-dasharray="${arcoPreenchido.toFixed(1)} ${arcoTotal.toFixed(1)}"/>
+    <line x1="${tickX1.toFixed(1)}" y1="${tickY1.toFixed(1)}" x2="${tickX2.toFixed(1)}" y2="${tickY2.toFixed(1)}" stroke="var(--text3)" stroke-width="2"/>
+    <text x="${cx}" y="${cy - 6}" text-anchor="middle" font-size="26" font-weight="700" fill="${cor}">${Math.round(pct)}%</text>
+    <text x="${cx}" y="${cy + 16}" text-anchor="middle" font-size="10" fill="var(--text3)">${labelCentro || ''}</text>
+  </svg>${labelBaixo ? `<div class="stat-sub" style="text-align:center;">${labelBaixo}</div>` : ''}`;
+}
 function uuid() {
   return 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -1012,9 +1035,33 @@ const Render = {
     function corDoStatus(status) {
       return status === 'estourado' ? 'var(--red)' : (status === 'atencao' ? 'var(--amber)' : 'var(--green)');
     }
+
+    // Resumo geral do mês em 2 velocímetros — despesa e receita são dimensões diferentes (passar de
+    // 100% é ruim numa, bom na outra), então cada um tem sua própria leitura de cor e status, do mesmo
+    // jeito que já é tratado por categoria/subcategoria em calcularOrcadoRealizado.
+    const totalOrcadoDespesa = Object.values(porCategoria).filter(a => a.tipo === 'Despesa').reduce((s, a) => s + a.orcado, 0);
+    const totalRealizadoDespesa = Object.values(porCategoria).filter(a => a.tipo === 'Despesa').reduce((s, a) => s + a.realizado, 0);
+    const pctDespesaGeral = totalOrcadoDespesa > 0 ? (totalRealizadoDespesa / totalOrcadoDespesa) * 100 : 0;
+    const statusDespesaGeral = pctDespesaGeral > 100 ? 'estourado' : (pctDespesaGeral >= 90 ? 'atencao' : 'ok');
+
+    const totalOrcadoReceita = Object.values(porCategoria).filter(a => a.tipo === 'Receita').reduce((s, a) => s + a.orcado, 0);
+    const totalRealizadoReceita = Object.values(porCategoria).filter(a => a.tipo === 'Receita').reduce((s, a) => s + a.realizado, 0);
+    const pctReceitaGeral = totalOrcadoReceita > 0 ? (totalRealizadoReceita / totalOrcadoReceita) * 100 : 0;
+    const statusReceitaGeral = pctReceitaGeral >= 100 ? 'ok' : 'atencao';
+
     el.innerHTML = `
       <div class="topbar"><h1>Orçamentos</h1>${mesNavHtml()}</div>
       ${estourados.length ? `<div class="banner warn"><span>⚠️</span><div><b>${estourados.length} subcategoria(s) estouraram o orçamento este mês:</b> ${estourados.map(e => subcategoriaNome(e.subcategoriaId) + ' (' + e.pct + '%)').join(', ')}. Veja o relatório completo em Relatórios.</div></div>` : ''}
+      ${(totalOrcadoDespesa > 0 || totalOrcadoReceita > 0) ? `<div class="grid grid-2">
+        ${totalOrcadoDespesa > 0 ? `<div class="card">
+          <div class="section-title" style="margin-top:0;">Despesas do mês</div>
+          ${velocimetroSVG(pctDespesaGeral, corDoStatus(statusDespesaGeral), 'do orçado', `Realizado ${fmtMoeda(totalRealizadoDespesa / 100)} de ${fmtMoeda(totalOrcadoDespesa / 100)} orçado`)}
+        </div>` : ''}
+        ${totalOrcadoReceita > 0 ? `<div class="card">
+          <div class="section-title" style="margin-top:0;">Receitas do mês</div>
+          ${velocimetroSVG(pctReceitaGeral, corDoStatus(statusReceitaGeral), 'da meta', `Realizado ${fmtMoeda(totalRealizadoReceita / 100)} de ${fmtMoeda(totalOrcadoReceita / 100)} orçado`)}
+        </div>` : ''}
+      </div>` : ''}
       <div class="card">
         ${Object.entries(porCategoria).map(([cid, agg]) => {
           const pct = agg.orcado > 0 ? Math.round((agg.realizado / agg.orcado) * 100) : 0;
