@@ -648,15 +648,17 @@ function itensDoMes(ano, mes) {
 }
 // Quando o rendimento do CDB (Ganhos > Investimento) chega e, no mesmo período, é reaplicado
 // (Investimento > Renda Fixa — já fora das despesas), esse dinheiro nunca ficou disponível de
-// verdade. Por isso a parte "casada" (o menor dos dois valores no período) também sai do total de
-// receitas — só o que sobrou como caixa de fato continua contando. Decisão tomada em conversa:
-// Saldo líquido/Economia do mês devem refletir só dinheiro que realmente ficou disponível.
+// verdade. Por isso ele também sai do total de receitas — só o que sobrou como caixa de fato
+// continua contando. Decisão tomada em conversa: Saldo líquido/Economia do mês devem refletir só
+// dinheiro que realmente ficou disponível.
+// Antes essa reaplicação era "adivinhada" (o menor valor entre rendimento recebido e qualquer
+// aporte em Renda Fixa no mês) — funcionava por coincidência, mas quebrava assim que um aporte novo
+// (sem relação com o rendimento) caísse no mesmo mês. Agora existe a subcategoria dedicada
+// "Reaplicação de rendimento" (747, ver logic.js) só para esse lançamento específico — usamos ela
+// direto, sem precisar adivinhar por valor.
 function rendimentoCDBReaplicadoNoPeriodo(itens) {
-  const rendimento = itens.filter(i => i.tipo === 'Receita' && i.categoriaId === 7 && i.subcategoriaId === 735)
+  return itens.filter(i => i.tipo === 'Despesa' && i.categoriaId === 5 && i.subcategoriaId === 747)
     .reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
-  const reaplicado = itens.filter(i => i.tipo === 'Despesa' && i.categoriaId === 5 && i.subcategoriaId === 713)
-    .reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
-  return Math.min(rendimento, reaplicado);
 }
 function totalReceitasMes(ano, mes) {
   const itens = itensDoMes(ano, mes);
@@ -1051,7 +1053,7 @@ const Render = {
 
     el.innerHTML = `
       <div class="topbar"><h1>Orçamentos</h1>${mesNavHtml()}</div>
-      ${estourados.length ? `<div class="banner warn"><span>⚠️</span><div><b>${estourados.length} subcategoria(s) estouraram o orçamento este mês:</b> ${estourados.map(e => subcategoriaNome(e.subcategoriaId) + ' (' + e.pct + '%)').join(', ')}. Veja o relatório completo em Relatórios.</div></div>` : ''}
+      ${estourados.length ? `<div class="banner warn"><span>⚠️</span><div><b>${estourados.length} subcategoria(s) estouraram o orçamento este mês:</b> ${estourados.map(e => subcategoriaNome(e.subcategoriaId) + ' (' + (e.orcado > 0 ? e.pct + '%' : 'sem orçamento') + ')').join(', ')}. Veja o relatório completo em Relatórios.</div></div>` : ''}
       ${(totalOrcadoDespesa > 0 || totalOrcadoReceita > 0) ? `<div class="grid grid-2">
         ${totalOrcadoDespesa > 0 ? `<div class="card">
           <div class="section-title" style="margin-top:0;">Despesas do mês</div>
@@ -1081,7 +1083,7 @@ const Render = {
             ${agg.subs.map(s => `<div class="row" style="padding:8px 0 8px 14px;"><div style="flex:1;">
               <div class="row-sub" style="margin-bottom:4px;">${subcategoriaNome(s.subcategoriaId)}</div>
               <div class="progress" style="height:6px;"><div class="progress-fill" style="width:${Math.min(s.pct,100)}%; background:${corDoStatus(s.status)}"></div></div>
-              <div class="stat-sub" style="margin-top:4px;">${fmtMoeda(s.realizado)} de ${fmtMoeda(s.orcado)} orçado (${s.pct}%)</div>
+              <div class="stat-sub" style="margin-top:4px;">${fmtMoeda(s.realizado)} de ${fmtMoeda(s.orcado)} orçado ${s.orcado > 0 ? '(' + s.pct + '%)' : '(sem orçamento definido)'}</div>
             </div></div>`).join('')}
           </div>`;
         }).join('') || '<div class="stat-sub">Nenhum orçamento definido para este mês.</div>'}
