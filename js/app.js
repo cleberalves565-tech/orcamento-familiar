@@ -1086,7 +1086,7 @@ const Render = {
           </div>`;
         }).join('') || '<div class="stat-sub">Nenhum orçamento definido para este mês.</div>'}
       </div>
-      <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem. Em categorias de receita (Ganhos), passar de 100% é positivo — por isso aparece em verde.</div></div>`;
+      <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem. Em categorias de receita (Ganhos), passar de 100% é positivo — por isso aparece em verde. Subcategorias com gasto/ganho real mas sem orçamento definido para o mês aparecem com orçado R$ 0 (100% fora do previsto), para bater sempre com o Painel geral.</div></div>`;
   },
 
   render_metas() {

@@ -105,9 +105,11 @@ const AppLogic = (function () {
       }
     }
     const linhas = [];
+    const chavesCobertas = new Set();
     for (const o of orcamentos) {
       if (o.ano !== ano || o.mes !== mes) continue;
       const chave = o.categoriaId + '_' + o.subcategoriaId;
+      chavesCobertas.add(chave);
       const mapaCerto = o.tipo === 'Receita' ? realizadoReceitaPorChave : realizadoPorChave;
       const realizadoCents = mapaCerto[chave] || 0;
       const orcadoCents = centavos(o.valorOrcado);
@@ -124,6 +126,25 @@ const AppLogic = (function () {
         orcado: reais(orcadoCents), realizado: reais(realizadoCents), pct, status,
       });
     }
+    // Gasto/ganho real numa subcategoria SEM orçamento definido para o mês não pode ficar invisível
+    // aqui — senão esta tela nunca bate com o Painel geral (que soma tudo, orçado ou não), e passa a
+    // impressão errada de que "sobrou" dinheiro que na real só não foi planejado. Entra com orçado
+    // R$0 (ou seja, 100% fora do previsto), pra aparecer e ser visto, não escondido.
+    function linhasSemOrcamento(mapa, tipo) {
+      Object.keys(mapa).forEach(chave => {
+        if (chavesCobertas.has(chave)) return;
+        const realizadoCents = mapa[chave];
+        if (!realizadoCents) return;
+        const [categoriaId, subcategoriaId] = chave.split('_').map(Number);
+        linhas.push({
+          categoriaId, subcategoriaId, tipo, orcado: 0, realizado: reais(realizadoCents),
+          pct: 999, status: tipo === 'Receita' ? 'ok' : 'estourado',
+        });
+        chavesCobertas.add(chave);
+      });
+    }
+    linhasSemOrcamento(realizadoPorChave, 'Despesa');
+    linhasSemOrcamento(realizadoReceitaPorChave, 'Receita');
     return linhas.sort((a, b) => b.pct - a.pct);
   }
 
