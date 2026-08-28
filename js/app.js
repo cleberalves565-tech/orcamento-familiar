@@ -47,7 +47,11 @@ function parcelaOptionsHtml() {
 }
 
 let STATE = null;
-let VIEW = { ano: 2026, mes: 7 };
+// Antes ficava fixo em { ano: 2026, mes: 7 } — todo carregamento do app abria travado em julho/2026,
+// não importa a data real. Lançamentos em meses mais novos (como este de setembro) pareciam "sumir"
+// até o usuário clicar em "Hoje" ou navegar manualmente. Agora calcula o mês atual de verdade.
+const HOJE_INICIAL = new Date();
+let VIEW = { ano: HOJE_INICIAL.getFullYear(), mes: HOJE_INICIAL.getMonth() + 1 };
 let inactivityTimer = null;
 
 // ---------------- Construção do estado inicial a partir da planilha ----------------
