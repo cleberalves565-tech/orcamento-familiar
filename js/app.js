@@ -711,6 +711,13 @@ function saldoDisponivelAteData(dataLimiteISO) {
   return AppLogic.reais(STATE.contas.filter(c => c.tipo !== 'Investimento')
     .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancsAteData) + (c.saldoInicial || 0)), 0));
 }
+// Mesma ideia, só que para a conta Investimento — usado no Painel geral para o card "Patrimônio
+// investido" acompanhar o mês selecionado, em vez de ficar travado no valor de hoje.
+function saldoInvestidoAteData(dataLimiteISO) {
+  const lancsAteData = STATE.lancamentos.filter(l => l.data <= dataLimiteISO);
+  return AppLogic.reais(STATE.contas.filter(c => c.tipo === 'Investimento')
+    .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancsAteData) + (c.saldoInicial || 0)), 0));
+}
 
 function mesNavHtml() {
   const { ano, mes } = VIEW;
@@ -871,6 +878,18 @@ const Render = {
     const receitas = totalReceitasMes(ano, mes);
     const despesas = totalDespesasMes(ano, mes);
     const economiaPct = receitas > 0 ? Math.round(((receitas - despesas) / receitas) * 100) : 0;
+    // "Saldo disponível" e "Patrimônio investido" ficavam travados no valor de HOJE mesmo navegando
+    // pra outro mês — só "Receitas/Despesas do mês" acompanhavam. Agora os 2 respeitam o mês
+    // selecionado: mostram o saldo real de como ele estava no fim daquele mês. Mês futuro (ainda não
+    // chegou) não tem saldo real pra mostrar, então trava em hoje e avisa isso no rodapé do card —
+    // pra projeção de mês futuro, é o gráfico de Relatórios que serve.
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    const fimDoMesView = ano + '-' + String(mes).padStart(2, '0') + '-31';
+    const viewEhFuturo = fimDoMesView > hojeISO;
+    const cortarEm = viewEhFuturo ? hojeISO : fimDoMesView;
+    const saldoDispView = saldoDisponivelAteData(cortarEm);
+    const saldoInvView = saldoInvestidoAteData(cortarEm);
+    const rotuloPeriodo = viewEhFuturo ? 'hoje (mês ainda não chegou)' : 'em ' + MESES_NOMES[mes] + '/' + ano;
     const ultimos = STATE.lancamentos.slice().sort((a, b) => b.data.localeCompare(a.data)).slice(0, 6);
     const porCategoria = {};
     itensDoMes(ano, mes).filter(i => i.tipo === 'Despesa' && !i.transferencia).forEach(i => {
@@ -884,8 +903,8 @@ const Render = {
     el.innerHTML = `
       <div class="topbar"><h1>Painel geral</h1>${mesNavHtml()}</div>
       <div class="grid grid-4">
-        <div class="card"><div class="stat-label">Saldo disponível</div><div class="stat-value">${fmtMoeda(saldoDisponivel())}</div><div class="stat-sub">Contas correntes e dinheiro</div></div>
-        <div class="card"><div class="stat-label">Patrimônio investido</div><div class="stat-value" style="color:var(--accent2)">${fmtMoeda(saldoInvestido())}</div><div class="stat-sub">Precisa resgate p/ virar caixa</div></div>
+        <div class="card"><div class="stat-label">Saldo disponível</div><div class="stat-value">${fmtMoeda(saldoDispView)}</div><div class="stat-sub">Contas correntes e dinheiro · ${rotuloPeriodo}</div></div>
+        <div class="card"><div class="stat-label">Patrimônio investido</div><div class="stat-value" style="color:var(--accent2)">${fmtMoeda(saldoInvView)}</div><div class="stat-sub">Precisa resgate p/ virar caixa · ${rotuloPeriodo}</div></div>
         <div class="card"><div class="stat-label">Receitas do mês</div><div class="stat-value up">${fmtMoeda(receitas)}</div></div>
         <div class="card"><div class="stat-label">Despesas do mês</div><div class="stat-value down">${fmtMoeda(despesas)}</div></div>
         <div class="card"><div class="stat-label">Economia do mês</div><div class="stat-value" style="color:var(--accent2)">${economiaPct}%</div></div>
