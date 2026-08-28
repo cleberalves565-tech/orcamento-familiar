@@ -1195,9 +1195,12 @@ const Render = {
     // que aparece no Painel geral no mês corrente, porque é exatamente a mesma conta. Anexado direto
     // nos mesmos objetos de "acumulado" (não um array novo) para que a janela abaixo já venha com ele.
     // Meses FUTUROS não ficam mais travados no valor de hoje: a partir do mês corrente, cada mês
-    // seguinte desconta o que já está comprometido no cartão (parcela já agendada = e.despesa, que
-    // para mês futuro é só isso mesmo, não tem outro lançamento real ainda). Não soma nenhuma receita
-    // futura de propósito — é o cenário conservador, "se nada mais entrar, até onde aguento".
+    // seguinte desconta o que já está comprometido no cartão (parcela já agendada) E soma qualquer
+    // receita ou despesa JÁ LANÇADA com data futura (ex.: um PPR ou 13º já registrado para o mês que
+    // vem) — isso não é "prever o futuro", é dado que já existe no sistema, só com data à frente.
+    // O que continua sem entrar é receita/despesa HIPOTÉTICA, que ninguém lançou ainda (ex.: o salário
+    // do mês que vem, antes de você registrá-lo) — por isso ainda é um cenário conservador: só conta
+    // o que já está confirmado, nunca o que é só expectativa.
     const hoje = new Date();
     const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
     const hojeISO = hoje.toISOString().slice(0, 10);
@@ -1210,7 +1213,7 @@ const Render = {
         e.projetado = false;
         saldoProjetadoRunning = e.saldoReal;
       } else {
-        saldoProjetadoRunning = AppLogic.reais(AppLogic.centavos(saldoProjetadoRunning) - AppLogic.centavos(e.despesa));
+        saldoProjetadoRunning = AppLogic.reais(AppLogic.centavos(saldoProjetadoRunning) + AppLogic.centavos(e.receita) - AppLogic.centavos(e.despesa));
         e.saldoReal = saldoProjetadoRunning;
         e.projetado = true;
       }
@@ -1270,7 +1273,7 @@ const Render = {
       </div>
 
       <div class="section-title">Evolução e projeção do saldo real em contas (fim de cada mês)</div>
-      <div class="logic-note"><span>ℹ️</span><div>Até ${MESES_NOMES[hoje.getMonth()+1]}/${hoje.getFullYear()} (mês atual), as barras são o saldo de verdade — disponível (Conta Corrente + PIX + Dinheiro), com o estoque inicial incluído e a fatura contada só quando é paga. Bate exatamente com "Saldo disponível" no Painel geral hoje: <b>${fmtMoeda(saldoDisponivel())}</b>. As barras <b>mais claras, marcadas "proj."</b>, são projeção: partem desse saldo real e só descontam as parcelas de cartão já comprometidas — <b>não somam nenhum salário ou receita futura</b> de propósito, para mostrar o cenário mais conservador possível: se nada mais entrar, é até aqui que o dinheiro aguenta.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Até ${MESES_NOMES[hoje.getMonth()+1]}/${hoje.getFullYear()} (mês atual), as barras são o saldo de verdade — disponível (Conta Corrente + PIX + Dinheiro), com o estoque inicial incluído e a fatura contada só quando é paga. Bate exatamente com "Saldo disponível" no Painel geral hoje: <b>${fmtMoeda(saldoDisponivel())}</b>. As barras <b>mais claras, marcadas "proj."</b>, são projeção: partem desse saldo real e somam/descontam tudo que <b>já foi lançado</b> pra esses meses (parcelas de cartão comprometidas, e também receita já registrada com data futura, como um PPR ou 13º já lançado) — mas não inventam nada: salário ou receita que ainda não foi lançado não entra na conta, por isso ainda é o cenário conservador, só com o que já está confirmado.</div></div>
       <div class="card">
         <div class="bars-zero">
           ${janela.map(e => {
@@ -1287,7 +1290,7 @@ const Render = {
             </div>`;
           }).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo; abaixo = conta no vermelho de verdade (cheque especial). Barras "(proj.)" são estimativa conservadora (sem receita futura) — se ficarem negativas, é um alerta para planejar, não um fato consumado.</div>
+        <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo; abaixo = conta no vermelho de verdade (cheque especial). Barras "(proj.)" somam só o que já foi lançado (parcelas comprometidas e receitas com data futura já registradas) — não incluem renda que ainda não foi lançada. Se ficarem negativas, é um alerta para planejar, não um fato consumado.</div>
       </div>
 
       <div class="section-title">Orçado x realizado por subcategoria (mês selecionado: ${MESES_NOMES[mes]}/${ano})</div>
