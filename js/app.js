@@ -674,19 +674,32 @@ function totalDespesasMes(ano, mes) {
     .filter(i => i.tipo === 'Despesa' && !i.transferencia)
     .reduce((s, i) => s + AppLogic.centavos(i.valor), 0));
 }
+// Usado em qualquer lugar que precise do saldo "de agora" — nunca deve incluir lançamento com data
+// futura (ex.: um PPR já lançado pra semana que vem), senão o saldo mostrado hoje fica maior do que
+// o dinheiro que você realmente tem disponível neste momento.
+function lancamentosAteHoje() {
+  const hojeISO = new Date().toISOString().slice(0, 10);
+  return STATE.lancamentos.filter(l => l.data <= hojeISO);
+}
 function saldoTotalContas() {
-  return AppLogic.reais(STATE.contas.reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0)), 0));
+  const lancs = lancamentosAteHoje();
+  return AppLogic.reais(STATE.contas.reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancs) + (c.saldoInicial || 0)), 0));
 }
 // Separado do saldo total: dinheiro que dá pra gastar agora (contas correntes/digitais/físicas)
 // x patrimônio aplicado (precisa resgate antes de virar dinheiro disponível). Ver conversa sobre
 // saldo do Painel geral parecendo "estranho" ao misturar os dois.
+// Antes somava TODOS os lançamentos sem filtrar por data — então um lançamento com data futura (ex.:
+// um PPR já registrado pra semana que vem) inflava o saldo "disponível" de hoje antes do dinheiro
+// realmente chegar. Agora as duas usam a mesma régua de "até hoje" que o gráfico de Relatórios já
+// usava — data futura só entra quando a data futura virar hoje.
 function saldoDisponivel() {
-  return AppLogic.reais(STATE.contas.filter(c => c.tipo !== 'Investimento')
-    .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0)), 0));
+  return saldoDisponivelAteData(new Date().toISOString().slice(0, 10));
 }
 function saldoInvestido() {
+  const hojeISO = new Date().toISOString().slice(0, 10);
+  const lancsAteHoje = STATE.lancamentos.filter(l => l.data <= hojeISO);
   return AppLogic.reais(STATE.contas.filter(c => c.tipo === 'Investimento')
-    .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0)), 0));
+    .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0)), 0));
 }
 // Saldo disponível de verdade (caixa real) na data em que ele estava, não hoje — usado para desenhar
 // a evolução do saldo real mês a mês em Relatórios. Filtra os lançamentos até a data-limite antes de
@@ -762,9 +775,10 @@ function montarContextoChatIA() {
     const fatura = AppLogic.calcularFaturaCartao(parcelasCartao, ano, mes);
     return { nome: c.nome, faturaDoMes: fatura.total, fechaDia: c.diaFechamento, venceDia: c.diaVencimento };
   });
+  const lancsAteHoje = lancamentosAteHoje();
   const contas = STATE.contas.map(c => ({
     nome: c.nome,
-    saldo: AppLogic.reais(AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0))),
+    saldo: AppLogic.reais(AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0))),
   }));
 
   const base = {
@@ -918,11 +932,12 @@ const Render = {
 
   render_contas() {
     const el = document.getElementById('screen-contas');
-    const temNegativa = STATE.contas.some(c => (AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0)) < 0);
+    const lancsAteHoje = lancamentosAteHoje();
+    const temNegativa = STATE.contas.some(c => (AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0)) < 0);
     el.innerHTML = `
       <div class="topbar"><h1>Contas</h1><button class="btn" onclick="Modals.openNovaConta()">+ Nova conta</button></div>
       <div class="grid grid-3">${STATE.contas.map(c => {
-        const saldo = AppLogic.calcularSaldoConta(c.id, STATE.lancamentos) + (c.saldoInicial || 0);
+        const saldo = AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0);
         return `<div class="card"><div class="stat-label">${c.nome}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub">${c.tipo}</div></div>`;
       }).join('') || '<div class="card stat-sub">Nenhuma conta cadastrada.</div>'}
       </div>
@@ -1121,8 +1136,11 @@ const Render = {
     // conta Investimento — e um resgate tem despesa na conta Investimento. Somar por categoria em todas
     // as contas contava a mesma transferência pelos dois lados e tratava resgate como se fosse aporte,
     // inflando o total. Assim o resumo bate exatamente com o saldo investido do Painel geral.
+    // Também só até hoje — mesma razão do saldoDisponivel/saldoInvestido: um aporte já lançado com
+    // data futura não pode contar como "já entrou" na conta Investimento antes da data chegar.
+    const hojeISO = new Date().toISOString().slice(0, 10);
     const contaInvestimento = STATE.contas.find(c => c.tipo === 'Investimento');
-    const lancsInv = contaInvestimento ? STATE.lancamentos.filter(l => l.carteiraId === contaInvestimento.id) : [];
+    const lancsInv = contaInvestimento ? STATE.lancamentos.filter(l => l.carteiraId === contaInvestimento.id && l.data <= hojeISO) : [];
     const aportesFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
     const recebidoFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
     const saldoFluxo = AppLogic.reais(AppLogic.centavos(aportesFluxo) - AppLogic.centavos(recebidoFluxo));
