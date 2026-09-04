@@ -4,6 +4,28 @@
   --accent:#3b82f6; --accent2:#60a5fa; --green:#22c55e; --red:#ef4444;
   --amber:#f59e0b; --pink:#ec4899; --purple:#a78bfa;
   --radius:10px;
+  /* Tons auxiliares (avisos/notas/estados) — separados dos tons principais acima para poderem
+     mudar de valor no tema claro sem depender das cores sólidas (--red, --green etc.), que
+     continuam iguais nos dois temas. */
+  --danger-text:#f87171; --danger-border-soft:#5c1e1e; --danger-bg-soft:#3d1414;
+  --note-border:#2e4468; --note-bg:#101b2e; --note-text:#8fb4e8; --note-text-strong:#bcd6fb;
+  --warn-bg:#2e1a08; --warn-border:#5c3a12; --warn-text:#f5c078;
+  --info-bg:#0e1f36; --info-border:#1c3a5c; --info-text:#8fb4e8;
+  --success-bg-soft:#0e1f16; --success-border-soft:#1c4c2e;
+}
+/* Tema claro — ativado via <html data-tema="claro">, escolhido em Configurações e aplicado por
+   aplicarTema() em js/app.js. Mesmas variáveis, valores diferentes; nenhuma regra abaixo precisa
+   saber qual tema está ativo. */
+[data-tema="claro"]{
+  --bg:#f4f6fb; --sidebar:#ffffff; --card:#ffffff; --card2:#eef1f8;
+  --border:#dde3ee; --text:#0f172a; --text2:#5b6578; --text3:#94a0b8;
+  --accent:#2563eb; --accent2:#3b82f6; --green:#16a34a; --red:#dc2626;
+  --amber:#d97706; --pink:#db2777; --purple:#7c3aed;
+  --danger-text:#dc2626; --danger-border-soft:#f3b7b7; --danger-bg-soft:#fdecec;
+  --note-border:#bcd2f5; --note-bg:#eaf2ff; --note-text:#2a5fa8; --note-text-strong:#184a8c;
+  --warn-bg:#fdf1de; --warn-border:#eec98a; --warn-text:#8a5a10;
+  --info-bg:#e8f1fd; --info-border:#bcd2f5; --info-text:#2a5fa8;
+  --success-bg-soft:#e7f7ea; --success-border-soft:#a9dcb3;
 }
 *{box-sizing:border-box; margin:0; padding:0;}
 body{
@@ -34,7 +56,7 @@ body{
   padding:7px 10px; border-radius:8px; font-size:12px; cursor:pointer; text-align:left;
 }
 .pill-btn:hover{color:var(--text); border-color:var(--accent);}
-.pill-btn.danger{color:#f87171; border-color:#4c1d1d;}
+.pill-btn.danger{color:var(--danger-text); border-color:var(--danger-border-soft);}
 
 .main{flex:1; padding:26px 34px 80px; max-width:1120px;}
 .topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:22px;}
@@ -60,10 +82,10 @@ body{
 .section-title:first-child{margin-top:0;}
 
 .logic-note{
-  border:1px dashed #2e4468; background:#101b2e; border-radius:8px; padding:10px 13px;
-  font-size:12.5px; color:#8fb4e8; margin:10px 0 18px; display:flex; gap:8px;
+  border:1px dashed var(--note-border); background:var(--note-bg); border-radius:8px; padding:10px 13px;
+  font-size:12.5px; color:var(--note-text); margin:10px 0 18px; display:flex; gap:8px;
 }
-.logic-note b{color:#bcd6fb;}
+.logic-note b{color:var(--note-text-strong);}
 
 .row{display:flex; align-items:center; justify-content:space-between; padding:11px 0; border-bottom:1px solid var(--border);}
 .row:last-child{border-bottom:none;}
@@ -79,7 +101,7 @@ body{
 .btn{background:var(--accent); color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer;}
 .btn:hover{background:var(--accent2);}
 .btn.ghost{background:transparent; border:1px solid var(--border); color:var(--text);}
-.btn.danger{background:#3d1414; color:#f87171; border:1px solid #5c1e1e;}
+.btn.danger{background:var(--danger-bg-soft); color:var(--danger-text); border:1px solid var(--danger-border-soft);}
 .btn.sm{padding:6px 11px; font-size:12px;}
 
 input,select{
@@ -128,8 +150,8 @@ label{font-size:12px; color:var(--text2); display:block; margin-bottom:5px;}
 .toggle.on .knob{left:20px; background:#fff;}
 
 .banner{border-radius:10px; padding:12px 16px; font-size:12.5px; margin-bottom:16px; display:flex; gap:10px; align-items:flex-start;}
-.banner.warn{background:#2e1a08; border:1px solid #5c3a12; color:#f5c078;}
-.banner.info{background:#0e1f36; border:1px solid #1c3a5c; color:#8fb4e8;}
+.banner.warn{background:var(--warn-bg); border:1px solid var(--warn-border); color:var(--warn-text);}
+.banner.info{background:var(--info-bg); border:1px solid var(--info-border); color:var(--info-text);}
 
 .table{width:100%; border-collapse:collapse; font-size:12.5px;}
 .table th{text-align:left; color:var(--text2); font-weight:500; padding:8px 10px; border-bottom:1px solid var(--border); font-size:11.5px; text-transform:uppercase;}
