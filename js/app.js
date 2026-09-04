@@ -92,7 +92,7 @@ function buildInitialStateFromSeed() {
     parcelas,
     orcamentos: SEED.orcamentos.slice(),
     metas: [], investimentos: [],
-    config: { chatIA: false, bloqueioMin: 5, modoAgregado: true },
+    config: { chatIA: false, bloqueioMin: 5, modoAgregado: true, tema: 'escuro' },
   };
 }
 
@@ -100,8 +100,17 @@ function buildEmptyState() {
   return {
     contas: [], cartoes: [], categorias: SEED.categorias, subcategorias: SEED.subcategorias,
     lancamentos: [], parcelas: [], orcamentos: [], metas: [], investimentos: [],
-    config: { chatIA: false, bloqueioMin: 5, modoAgregado: true },
+    config: { chatIA: false, bloqueioMin: 5, modoAgregado: true, tema: 'escuro' },
   };
+}
+
+// Aplica o tema salvo (ou "escuro" se ainda não existir, para não mudar a aparência de quem já
+// usava o app antes desta funcionalidade existir). Chamada sempre que o app fica visível — no
+// login normal, na sincronização entre aparelhos e no fim do onboarding — para a preferência
+// valer assim que a pessoa entra, e também na troca manual em Configurações.
+function aplicarTema() {
+  const tema = (STATE && STATE.config && STATE.config.tema) || 'escuro';
+  document.documentElement.setAttribute('data-tema', tema === 'claro' ? 'claro' : 'escuro');
 }
 
 async function persist() {
@@ -229,6 +238,7 @@ const Auth = {
     try {
       const pinUsado = this.pinBuffer;
       STATE = await AppStorage.unlockVault(pinUsado);
+      aplicarTema();
       document.getElementById('authScreen').style.display = 'none';
       document.getElementById('app').style.display = 'flex';
       Nav.show('dashboard');
@@ -517,6 +527,7 @@ const Auth = {
       try {
         STATE = await AppStorage.unlockVaultFromRaw(this.pinBuffer, this._syncedRaw);
         await AppStorage.adoptRaw(this._syncedRaw);
+        aplicarTema();
         document.getElementById('authScreen').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         Nav.show('dashboard');
@@ -563,6 +574,7 @@ const Auth = {
   async reallyFinish() {
     STATE = this._pendingInitial;
     await AppStorage.createVault(this.novoPin, STATE);
+    aplicarTema();
     document.getElementById('authScreen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     Nav.show('dashboard');
@@ -998,7 +1010,7 @@ const Render = {
           <div class="stat-sub" style="margin:4px 0 12px;">Fecha dia ${c.diaFechamento} · Vence dia ${c.diaVencimento}</div>
           <div class="stat-value">${fmtMoeda(fatura.total)}</div>
           <div class="stat-sub">fatura de ${MESES_NOMES[mes]}/${ano}</div>
-          <div style="display:flex; align-items:center; gap:6px; margin-top:10px; padding:8px 10px; background:#0e1f16; border:1px solid #1c4c2e; border-radius:8px; font-size:12px; color:var(--green);">
+          <div style="display:flex; align-items:center; gap:6px; margin-top:10px; padding:8px 10px; background:var(--success-bg-soft); border:1px solid var(--success-border-soft); border-radius:8px; font-size:12px; color:var(--green);">
             <span>✓</span><span>Fatura = soma automática das ${fatura.itens.length} parcela(s) com competência neste mês (compras feitas até o fechamento anterior ao vencimento de ${MESES_NOMES[mes]})</span>
           </div>
           <button class="btn ghost sm" style="margin-top:12px;" onclick="Modals.toggleDetail('${c.id}')">Ver detalhamento</button>
@@ -1018,8 +1030,8 @@ const Render = {
           ${divergente
             ? `<div class="banner warn" style="margin-top:6px;"><span>⚠️</span><div><b>Diferença de ${fmtMoeda(Math.abs(diffCents / 100))}</b> — ${diffCents > 0 ? 'pago a mais do que o valor desta fatura' : 'da fatura sem pagamento registrado'}. Confira se falta lançar o "💳Pagamento de Fatura" deste cartão em ${MESES_NOMES[mes]}, ou se algum valor foi digitado errado.</div></div>`
             : aindaNoPrazo
-              ? `<div style="display:flex; align-items:center; gap:6px; margin-top:6px; padding:8px 10px; background:#101b2e; border:1px dashed #2e4468; border-radius:8px; font-size:12px; color:#8fb4e8;"><span>ℹ️</span><span>Ainda dentro do prazo — vence dia ${c.diaVencimento}, sem problema se o pagamento ainda não foi lançado.</span></div>`
-              : `<div style="display:flex; align-items:center; gap:6px; margin-top:6px; padding:8px 10px; background:#0e1f16; border:1px solid #1c4c2e; border-radius:8px; font-size:12px; color:var(--green);"><span>✓</span><span>Pago bate com a fatura deste mês</span></div>`}
+              ? `<div style="display:flex; align-items:center; gap:6px; margin-top:6px; padding:8px 10px; background:var(--note-bg); border:1px dashed var(--note-border); border-radius:8px; font-size:12px; color:var(--note-text);"><span>ℹ️</span><span>Ainda dentro do prazo — vence dia ${c.diaVencimento}, sem problema se o pagamento ainda não foi lançado.</span></div>`
+              : `<div style="display:flex; align-items:center; gap:6px; margin-top:6px; padding:8px 10px; background:var(--success-bg-soft); border:1px solid var(--success-border-soft); border-radius:8px; font-size:12px; color:var(--green);"><span>✓</span><span>Pago bate com a fatura deste mês</span></div>`}
           `}
         </div>`;
       }).join('') || '<div class="card stat-sub">Nenhum cartão cadastrado.</div>'}
@@ -1369,7 +1381,7 @@ const Render = {
       ${CHAT_HISTORICO.length ? '<button class="btn ghost sm" style="margin-top:10px;" onclick="ChatIA.limparHistorico()">Limpar conversa</button>' : ''}
       <div class="logic-note" style="margin-top:10px;"><span>ℹ️</span><div>${STATE.config.modoAgregado ? 'Modo agregado: só totais por categoria são enviados junto da pergunta.' : 'Modo detalhado: as descrições e valores das transações deste mês são enviados junto da pergunta.'} A conversa não é salva nem sincronizada — fica só nesta sessão, some ao recarregar.</div></div>
       ` : `
-      <div class="card" style="border-color:#5c3a12;">
+      <div class="card" style="border-color:var(--warn-border);">
         <div class="row-title" style="margin-bottom:8px;">💬 Ative para começar a conversar</div>
         <div class="stat-sub">Depois de ativado, você escolhe entre modo agregado (mais privado, só totais) ou detalhado (mais preciso, inclui descrições das transações do mês).</div>
       </div>`}`;
@@ -1386,6 +1398,13 @@ const Render = {
             <option value="5" ${STATE.config.bloqueioMin===5?'selected':''}>5 minutos</option>
             <option value="10" ${STATE.config.bloqueioMin===10?'selected':''}>10 minutos</option>
             <option value="0" ${STATE.config.bloqueioMin===0?'selected':''}>Nunca</option>
+          </select></div>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row"><div><div class="row-title">Aparência</div><div class="row-sub">Cores da tela — clara ou escura</div></div>
+          <select onchange="Actions.setTema(this.value)">
+            <option value="escuro" ${(STATE.config.tema||'escuro')==='escuro'?'selected':''}>Escura</option>
+            <option value="claro" ${STATE.config.tema==='claro'?'selected':''}>Clara</option>
           </select></div>
       </div>
       <div class="card" style="margin-bottom:10px;">
@@ -1427,7 +1446,7 @@ const Render = {
         <div class="row"><div class="row-title">Integridade dos dados</div><div class="row-value" style="color:${integridade.divergentes.length?'var(--red)':'var(--green)'}">${integridade.ok}/${integridade.total} conferem</div></div>
       </div>
       <div class="card">
-        <div class="row"><div><div class="row-title" style="color:#f87171;">Zerar dados</div><div class="row-sub">Apaga tudo permanentemente</div></div><button class="btn danger sm" onclick="Actions.zerarDados()">Zerar</button></div>
+        <div class="row"><div><div class="row-title" style="color:var(--danger-text);">Zerar dados</div><div class="row-sub">Apaga tudo permanentemente</div></div><button class="btn danger sm" onclick="Actions.zerarDados()">Zerar</button></div>
       </div>`;
     this.fillSyncCard();
     this.fillLanSyncCard();
@@ -1566,7 +1585,7 @@ const Modals = {
     document.getElementById('modalNovaTransacaoBody').innerHTML = `
       <div class="modal-head"><h3>Nova transação</h3><button class="close-x" onclick="Modals.close('novaTransacao')">✕</button></div>
       <div class="tabs">
-        <div class="tab active" id="tabDespesa" style="flex:1; text-align:center; background:#3d1414; color:#f87171;" onclick="Modals.setTipoTransacao('Despesa')">Despesa</div>
+        <div class="tab active" id="tabDespesa" style="flex:1; text-align:center; background:var(--danger-bg-soft); color:var(--danger-text);" onclick="Modals.setTipoTransacao('Despesa')">Despesa</div>
         <div class="tab" id="tabReceita" style="flex:1; text-align:center;" onclick="Modals.setTipoTransacao('Receita')">Receita</div>
       </div>
       <input type="hidden" id="ntTipo" value="Despesa">
@@ -1944,6 +1963,7 @@ const Actions = {
     if (box) box.scrollTop = box.scrollHeight;
   },
   async setBloqueio(min) { STATE.config.bloqueioMin = Number(min); await persist(); Auth.resetInactivity(); },
+  async setTema(valor) { STATE.config.tema = valor; aplicarTema(); await persist(); },
 
   exportarCSV(escopo) {
     const { ano, mes } = VIEW;
