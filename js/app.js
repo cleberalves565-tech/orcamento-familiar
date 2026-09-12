@@ -934,13 +934,21 @@ const Render = {
     // selecionado: mostram o saldo real de como ele estava no fim daquele mês. Mês futuro (ainda não
     // chegou) não tem saldo real pra mostrar, então trava em hoje e avisa isso no rodapé do card —
     // pra projeção de mês futuro, é o gráfico de Relatórios que serve.
-    const hojeISO = new Date().toISOString().slice(0, 10);
-    const fimDoMesView = ano + '-' + String(mes).padStart(2, '0') + '-31';
-    const viewEhFuturo = fimDoMesView > hojeISO;
-    const cortarEm = viewEhFuturo ? hojeISO : fimDoMesView;
+    const hoje = new Date();
+    const hojeISO = hoje.toISOString().slice(0, 10);
+    const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+    const chaveView = ano + '-' + String(mes).padStart(2, '0');
+    // 3 casos, não 2: mês PASSADO (já fechou, corta no fim dele), mês ATUAL (em andamento, corta em
+    // hoje) e mês FUTURO (ainda não começou, também corta em hoje — não tem outro valor real pra
+    // mostrar). Antes só existiam 2 ramos e o mês atual caía junto do futuro, então a legenda dizia
+    // "mês ainda não chegou" pro próprio mês corrente — errado, ele já chegou, só não terminou.
+    const mesEhFuturo = chaveView > chaveHoje;
+    const mesEhAtual = chaveView === chaveHoje;
+    const fimDoMesView = chaveView + '-31';
+    const cortarEm = (mesEhFuturo || mesEhAtual) ? hojeISO : fimDoMesView;
     const saldoDispView = saldoDisponivelAteData(cortarEm);
     const saldoInvView = saldoInvestidoAteData(cortarEm);
-    const rotuloPeriodo = viewEhFuturo ? 'hoje (mês ainda não chegou)' : 'em ' + MESES_NOMES[mes] + '/' + ano;
+    const rotuloPeriodo = mesEhFuturo ? 'hoje (mês ainda não chegou)' : mesEhAtual ? 'hoje' : 'em ' + MESES_NOMES[mes] + '/' + ano;
     const ultimos = STATE.lancamentos.slice().sort((a, b) => b.data.localeCompare(a.data)).slice(0, 6);
     const porCategoria = {};
     itensDoMes(ano, mes).filter(i => i.tipo === 'Despesa' && !i.transferencia).forEach(i => {
