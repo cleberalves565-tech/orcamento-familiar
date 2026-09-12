@@ -1242,6 +1242,8 @@ const Render = {
   setRelatorioModo(m) { this.relatorioModo = m; this.render_relatorios(); },
   relatorioJanela: 12,
   setRelatorioJanela(n) { this.relatorioJanela = n; this.render_relatorios(); },
+  forecastModo: 'mesAmes',
+  setForecastModo(m) { this.forecastModo = m; this.render_relatorios(); },
 
   render_relatorios() {
     const el = document.getElementById('screen-relatorios');
@@ -1324,15 +1326,22 @@ const Render = {
     const maxSaldoReal = Math.max(1, ...janela.map(e => Math.abs(e.saldoReal)));
 
     // Forecast por orçamento (ver forecastMes/mesesOrcamentoFuturo acima) — cobre todos os meses
-    // futuros que já têm orçamento cadastrado, encadeados a partir do saldo disponível de hoje.
+    // futuros que já têm orçamento cadastrado. Duas leituras do mesmo cálculo, alternáveis pela pessoa:
+    // "Mês a mês" isola cada mês (receita orçada − despesa orçada daquele mês, sem herdar nada do mês
+    // anterior — mostra se AQUELE mês, sozinho, fecha no azul ou vermelho); "Acumulado" encadeia a
+    // partir do saldo disponível de hoje, igual ao gráfico de cima, só que com orçamento no lugar do
+    // cenário conservador.
     const mesesForecast = mesesOrcamentoFuturo();
-    let saldoForecastRunning = saldoDisponivel();
+    let saldoAcumRunning = saldoDisponivel();
     const forecastSerie = mesesForecast.map(({ ano: y, mes: m }) => {
       const { despesa, receita, candidatosCorte } = forecastMes(y, m);
-      saldoForecastRunning = AppLogic.reais(AppLogic.centavos(saldoForecastRunning) + AppLogic.centavos(receita) - AppLogic.centavos(despesa));
-      return { y, m, despesa, receita, saldo: saldoForecastRunning, candidatosCorte };
+      const saldoMes = AppLogic.reais(AppLogic.centavos(receita) - AppLogic.centavos(despesa));
+      saldoAcumRunning = AppLogic.reais(AppLogic.centavos(saldoAcumRunning) + AppLogic.centavos(receita) - AppLogic.centavos(despesa));
+      return { y, m, despesa, receita, saldoMes, saldoAcumulado: saldoAcumRunning, candidatosCorte };
     });
-    const maxSaldoForecast = Math.max(1, ...forecastSerie.map(e => Math.abs(e.saldo)));
+    const forecastModo = this.forecastModo;
+    const forecastValor = e => forecastModo === 'acumulado' ? e.saldoAcumulado : e.saldoMes;
+    const maxSaldoForecast = Math.max(1, ...forecastSerie.map(e => Math.abs(forecastValor(e))));
 
     el.innerHTML = `
       <div class="topbar"><h1>Relatórios</h1>${mesNavHtml()}</div>
@@ -1393,27 +1402,34 @@ const Render = {
       </div>
 
       <div class="section-title">Forecast por orçamento (se você seguir o orçamento à risca)</div>
-      <div class="logic-note"><span>ℹ️</span><div>Diferente do gráfico acima: aqui cada mês futuro assume o <b>valor orçado</b> onde ainda não há nada lançado, e usa o que já está comprometido (parcela de cartão, lançamento real) sempre que isso for maior que o orçado — nada já garantido é "apagado" pelo orçamento. Cobre todos os meses com orçamento cadastrado. Só é tão confiável quanto o seu orçamento estiver realista.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Diferente do gráfico acima: aqui cada mês futuro assume o <b>valor orçado</b> onde ainda não há nada lançado, e usa o que já está comprometido (parcela de cartão, lançamento real) sempre que isso for maior que o orçado — nada já garantido é "apagado" pelo orçamento. Cobre todos os meses com orçamento cadastrado. Só é tão confiável quanto o seu orçamento estiver realista. <b>Mês a mês</b> isola cada mês (sem herdar nada do anterior); <b>Acumulado</b> encadeia a partir do saldo disponível de hoje.</div></div>
+      <div class="tabs" style="margin-bottom:10px;">
+        <div class="tab ${forecastModo==='mesAmes'?'active':''}" onclick="Render.setForecastModo('mesAmes')">Mês a mês</div>
+        <div class="tab ${forecastModo==='acumulado'?'active':''}" onclick="Render.setForecastModo('acumulado')">Acumulado</div>
+      </div>
       ${forecastSerie.length === 0 ? '<div class="card stat-sub">Nenhum mês futuro com orçamento cadastrado ainda.</div>' : `
       <div class="card">
         <div class="bars-zero">
           ${forecastSerie.map(e => {
-            const isPos = e.saldo >= 0;
-            const pct = Math.max(4, Math.round((Math.abs(e.saldo) / maxSaldoForecast) * 100));
+            const v = forecastValor(e);
+            const isPos = v >= 0;
+            const pct = Math.max(4, Math.round((Math.abs(v) / maxSaldoForecast) * 100));
             return `<div class="bar-col-zero">
-              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(e.saldo)}</div><div class="bar-d" style="height:${pct}%; background:var(--accent2); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div>` : ''}</div>
+              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(v)}</div><div class="bar-d" style="height:${pct}%; background:var(--accent2); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div>` : ''}</div>
               <div class="bar-zero-axis"></div>
-              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--amber); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div><div class="bar-value">${fmtMoeda(e.saldo)}</div>` : ''}</div>
+              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--amber); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div><div class="bar-value">${fmtMoeda(v)}</div>` : ''}</div>
               <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)} (orç.)</div>
             </div>`;
           }).join('')}
         </div>
-        <div class="stat-sub" style="margin-top:8px;">Barras azuis = saldo previsto positivo; laranja = negativo (alerta de planejamento, com base no orçamento — não é fato consumado).</div>
+        <div class="stat-sub" style="margin-top:8px;">${forecastModo==='acumulado'
+          ? 'Barras azuis = saldo acumulado positivo; laranja = negativo — cada mês soma em cima do mês anterior, a partir do saldo disponível de hoje.'
+          : 'Barras azuis = mês fecha no azul; laranja = mês fecha no vermelho — cada barra é o resultado do próprio mês (receita orçada − despesa orçada), sem acumular com o mês anterior.'}</div>
         ${(() => {
-          const negativos = forecastSerie.filter(e => e.saldo < 0 && e.candidatosCorte.length);
+          const negativos = forecastSerie.filter(e => forecastValor(e) < 0 && e.candidatosCorte.length);
           if (!negativos.length) return '';
           return `<div class="banner warn" style="margin-top:12px;"><span>⚠️</span><div>
-            ${negativos.map(e => `<div style="margin-bottom:8px;"><b>${MESES_NOMES[e.m]}/${e.y}</b> fecha negativo no forecast — maiores oportunidades de corte (gastos variáveis, não fixos):<br>
+            ${negativos.map(e => `<div style="margin-bottom:8px;"><b>${MESES_NOMES[e.m]}/${e.y}</b> ${forecastModo==='acumulado' ? `fica com saldo acumulado negativo (${fmtMoeda(e.saldoAcumulado)})` : `fecha negativo sozinho (despesa orçada ${fmtMoeda(e.despesa)} > receita orçada ${fmtMoeda(e.receita)})`} — maiores oportunidades de corte (gastos variáveis, não fixos):<br>
               ${e.candidatosCorte.slice(0, 3).map(c => `${subcategoriaNome(c.subcategoriaId)} (${categoriaNome(c.categoriaId)}) — orçado ${fmtMoeda(c.orcado)}`).join(' · ')}
             </div>`).join('')}
           </div></div>`;
