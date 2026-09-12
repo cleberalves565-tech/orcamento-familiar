@@ -49,9 +49,22 @@ const AppLogic = (function () {
   const SUBCATEGORIA_REAPLICACAO_RENDIMENTO = 747;
   const CATEGORIA_GANHOS = 7;
   const SUBCATEGORIA_SALDO_INICIAL = 723;
+  // Categoria criada para reconciliação: quando o saldo do app diverge do extrato real por causa de
+  // lançamentos antigos faltando/duplicados espalhados pelo histórico (o método "saldo = receita −
+  // despesa acumulado" não se autocorrige — um furo de qualquer mês passado arrasta o saldo de hoje
+  // pra sempre), em vez de caçar cada furo, lança-se aqui a diferença de uma vez. Não é receita nem
+  // despesa de verdade, por isso conta pro saldo da conta (calcularSaldoConta, que soma tudo sem
+  // filtrar categoria) mas fica de fora de tudo que é fluxo de caixa/orçamento — mesmo tratamento do
+  // Saldo Inicial acima.
+  const CATEGORIA_AJUSTE_SALDO = 8;
+
+  function isAjusteSaldo(lancamento) {
+    return lancamento.categoriaId === CATEGORIA_AJUSTE_SALDO;
+  }
 
   function isTransferenciaInterna(lancamento) {
     if (isTransferenciaFatura(lancamento)) return true;
+    if (isAjusteSaldo(lancamento)) return true;
     if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE &&
         (lancamento.subcategoriaId === SUBCATEGORIA_RENDA_FIXA || lancamento.subcategoriaId === SUBCATEGORIA_REAPLICACAO_RENDIMENTO)) return true;
     if (lancamento.categoriaId === CATEGORIA_GANHOS && lancamento.subcategoriaId === SUBCATEGORIA_SALDO_INICIAL) return true;
@@ -96,6 +109,7 @@ const AppLogic = (function () {
       const [ly, lm] = l.data.split('-').map(Number);
       if (ly !== ano || lm !== mes) continue;
       const chave = l.categoriaId + '_' + l.subcategoriaId;
+      if (isAjusteSaldo(l)) continue;
       if (l.tipo === 'Despesa') {
         if (isTransferenciaFatura(l)) continue;
         if (l.formaPagamento === 'Cartão de Crédito') continue;
@@ -153,8 +167,8 @@ const AppLogic = (function () {
   }
 
   return {
-    centavos, reais, gerarParcelas, isTransferenciaFatura, isTransferenciaInterna,
+    centavos, reais, gerarParcelas, isTransferenciaFatura, isTransferenciaInterna, isAjusteSaldo,
     calcularFaturaCartao, calcularSaldoConta, calcularOrcadoRealizado, detectarEstouros,
-    CATEGORIA_PAGAMENTO_FATURA,
+    CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO,
   };
 })();

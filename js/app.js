@@ -1,7 +1,7 @@
 // Controlador da interface — liga as telas aprovadas na Etapa 2 aos dados reais,
 // ao motor de regras (logic.js) e ao armazenamento criptografado (storage.js).
 
-const CATEGORIA_ICONS = { 1: '🏠', 2: '💸', 3: '🧾', 4: '📺', 5: '💰', 6: '🔁', 7: '💵' };
+const CATEGORIA_ICONS = { 1: '🏠', 2: '💸', 3: '🧾', 4: '📺', 5: '💰', 6: '🔁', 7: '💵', 8: '⚖️' };
 const MESES_NOMES = ['', 'Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 function fmtMoeda(v) {
