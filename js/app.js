@@ -1673,8 +1673,10 @@ const Modals = {
 
   openNovaTransacao() {
     const catOpts = STATE.categorias.map(c => `<option value="${c.id}">${CATEGORIA_ICONS[c.id]||''} ${c.nome}</option>`).join('');
+    // "Digital" (ex.: PIX Central) fica de fora do seletor de propósito — Pix não é um lugar onde o
+    // dinheiro mora, é só a forma como ele sai da conta de verdade. Ver Modals.refreshFormaPagamento.
     const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}">${c.nome}</option>`)
-      .concat(STATE.contas.map(c => `<option value="conta_${c.id}">${c.nome}</option>`)).join('');
+      .concat(STATE.contas.filter(c => c.tipo !== 'Digital').map(c => `<option value="conta_${c.id}">${c.nome}</option>`)).join('');
     const cartaoFaturaOpts = STATE.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
     document.getElementById('modalNovaTransacaoBody').innerHTML = `
       <div class="modal-head"><h3>Nova transação</h3><button class="close-x" onclick="Modals.close('novaTransacao')">✕</button></div>
@@ -1692,7 +1694,12 @@ const Modals = {
         <div class="field"><label>Categoria</label><select id="ntCategoria" onchange="Modals.refreshSubcategorias(); Modals.refreshCampoCartaoFatura('nt')">${catOpts}</select></div>
         <div class="field"><label>Subcategoria</label><select id="ntSubcategoria"></select></div>
       </div>
-      <div class="field"><label>Conta ou cartão</label><select id="ntConta" onchange="Modals.refreshParcelas()">${contaOpts}</select></div>
+      <div class="field"><label>Conta ou cartão</label><select id="ntConta" onchange="Modals.refreshParcelas(); Modals.refreshFormaPagamento('nt')">${contaOpts}</select></div>
+      <div class="field" id="ntCampoFormaPagamento" style="display:none;"><label>Forma de pagamento</label>
+        <select id="ntFormaPagamento">
+          <option value="Débito">Débito</option>
+          <option value="Pix">Pix</option>
+        </select></div>
       <div class="field" id="ntCampoCartaoFatura" style="display:none;"><label>Qual cartão esta fatura está pagando?</label><select id="ntCartaoFatura">${cartaoFaturaOpts}</select></div>
       <div class="field" id="campoParcelas" style="display:none;"><label>Número de parcelas</label>
         <select id="ntParcelas" onchange="Modals.calcParcelasPreview()">
@@ -1702,15 +1709,16 @@ const Modals = {
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarTransacao()">Lançar</button>`;
     Modals.refreshSubcategorias();
     Modals.refreshParcelas();
+    Modals.refreshFormaPagamento('nt');
     Modals.refreshCampoCartaoFatura('nt');
     Modals.open('novaTransacao');
   },
   setTipoTransacao(tipo) {
     document.getElementById('ntTipo').value = tipo;
-    document.getElementById('tabDespesa').style.background = tipo === 'Despesa' ? '#3d1414' : '';
-    document.getElementById('tabDespesa').style.color = tipo === 'Despesa' ? '#f87171' : '';
-    document.getElementById('tabReceita').style.background = tipo === 'Receita' ? '#0e2f1c' : '';
-    document.getElementById('tabReceita').style.color = tipo === 'Receita' ? '#4ade80' : '';
+    document.getElementById('tabDespesa').style.background = tipo === 'Despesa' ? 'var(--danger-bg-soft)' : '';
+    document.getElementById('tabDespesa').style.color = tipo === 'Despesa' ? 'var(--danger-text)' : '';
+    document.getElementById('tabReceita').style.background = tipo === 'Receita' ? 'var(--success-bg-soft)' : '';
+    document.getElementById('tabReceita').style.color = tipo === 'Receita' ? 'var(--green)' : '';
   },
   refreshSubcategorias() {
     const catId = Number(document.getElementById('ntCategoria').value);
@@ -1728,6 +1736,16 @@ const Modals = {
     document.getElementById('campoParcelas').style.display = isCartao ? 'block' : 'none';
     document.getElementById('parcelasPreview').style.display = isCartao ? 'block' : 'none';
     if (isCartao) Modals.calcParcelasPreview();
+  },
+  // Débito/Pix só faz sentido pra conta bancária de verdade (ex.: Conta Corrente) — pra Dinheiro
+  // (físico) ou cartão (já tratado à parte) o campo fica escondido, porque a pergunta não se aplica.
+  refreshFormaPagamento(prefixo) {
+    const campo = document.getElementById(prefixo + 'CampoFormaPagamento');
+    if (!campo) return;
+    const val = document.getElementById(prefixo + 'Conta').value;
+    if (val.startsWith('cartao_')) { campo.style.display = 'none'; return; }
+    const conta = STATE.contas.find(c => c.id === Number(val.replace('conta_', '')));
+    campo.style.display = (conta && conta.tipo === 'Conta Bancária') ? 'block' : 'none';
   },
   calcParcelasPreview() {
     const n = parseInt(document.getElementById('ntParcelas').value, 10);
@@ -1826,8 +1844,14 @@ const Modals = {
     const descEsc = String(l.descricao).replace(/"/g, '&quot;');
     const catOpts = STATE.categorias.map(c => `<option value="${c.id}" ${c.id === l.categoriaId ? 'selected' : ''}>${CATEGORIA_ICONS[c.id] || ''} ${c.nome}</option>`).join('');
     const isCartaoAtual = l.formaPagamento === 'Cartão de Crédito';
+    // Se este lançamento antigo ainda estiver na conta "PIX Central" (ou outra "Digital"), ela
+    // continua na lista só pra não sumir a seleção atual — mas não aparece pra novos lançamentos.
+    const contaAtualDigitalForaDaLista = STATE.contas.find(c => c.id === l.carteiraId && c.tipo === 'Digital');
+    const contasParaMostrar = contaAtualDigitalForaDaLista
+      ? STATE.contas.filter(c => c.tipo !== 'Digital').concat([contaAtualDigitalForaDaLista])
+      : STATE.contas.filter(c => c.tipo !== 'Digital');
     const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}" ${isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)
-      .concat(STATE.contas.map(c => `<option value="conta_${c.id}" ${!isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)).join('');
+      .concat(contasParaMostrar.map(c => `<option value="conta_${c.id}" ${!isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)).join('');
     const cartaoFaturaAtual = l.categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA ? resolverCartaoDaFatura(l) : null;
     const cartaoFaturaOpts = STATE.cartoes.map(c => `<option value="${c.id}" ${cartaoFaturaAtual && c.id === cartaoFaturaAtual.id ? 'selected' : ''}>${c.nome}</option>`).join('');
     document.getElementById('modalEditarTransacaoBody').innerHTML = `
@@ -1848,7 +1872,12 @@ const Modals = {
         <div class="field"><label>Categoria</label><select id="etCategoria" onchange="Modals.refreshSubcategoriasEdicao(); Modals.refreshCampoCartaoFatura('et')">${catOpts}</select></div>
         <div class="field"><label>Subcategoria</label><select id="etSubcategoria"></select></div>
       </div>
-      <div class="field"><label>Conta ou cartão</label><select id="etConta" onchange="Modals.refreshParcelasEdicao()">${contaOpts}</select></div>
+      <div class="field"><label>Conta ou cartão</label><select id="etConta" onchange="Modals.refreshParcelasEdicao(); Modals.refreshFormaPagamento('et')">${contaOpts}</select></div>
+      <div class="field" id="etCampoFormaPagamento" style="display:none;"><label>Forma de pagamento</label>
+        <select id="etFormaPagamento">
+          <option value="Débito" ${l.formaPagamento==='Débito'?'selected':''}>Débito</option>
+          <option value="Pix" ${l.formaPagamento==='Pix'?'selected':''}>Pix</option>
+        </select></div>
       <div class="field" id="etCampoCartaoFatura" style="display:none;"><label>Qual cartão esta fatura está pagando?</label><select id="etCartaoFatura">${cartaoFaturaOpts}</select></div>
       <div class="field" id="etCampoParcelas" style="display:none;"><label>Número de parcelas</label>
         <select id="etParcelas" onchange="Modals.calcParcelasPreviewEdicao()">
@@ -1864,15 +1893,16 @@ const Modals = {
     document.getElementById('etSubcategoria').value = l.subcategoriaId;
     document.getElementById('etParcelas').value = String(l.qtdParcelas || 1);
     Modals.refreshParcelasEdicao();
+    Modals.refreshFormaPagamento('et');
     Modals.refreshCampoCartaoFatura('et');
     Modals.open('editarTransacao');
   },
   setTipoEdicao(tipo) {
     document.getElementById('etTipo').value = tipo;
-    document.getElementById('etTabDespesa').style.background = tipo === 'Despesa' ? '#3d1414' : '';
-    document.getElementById('etTabDespesa').style.color = tipo === 'Despesa' ? '#f87171' : '';
-    document.getElementById('etTabReceita').style.background = tipo === 'Receita' ? '#0e2f1c' : '';
-    document.getElementById('etTabReceita').style.color = tipo === 'Receita' ? '#4ade80' : '';
+    document.getElementById('etTabDespesa').style.background = tipo === 'Despesa' ? 'var(--danger-bg-soft)' : '';
+    document.getElementById('etTabDespesa').style.color = tipo === 'Despesa' ? 'var(--danger-text)' : '';
+    document.getElementById('etTabReceita').style.background = tipo === 'Receita' ? 'var(--success-bg-soft)' : '';
+    document.getElementById('etTabReceita').style.color = tipo === 'Receita' ? 'var(--green)' : '';
   },
   refreshSubcategoriasEdicao() {
     const catId = Number(document.getElementById('etCategoria').value);
@@ -1918,9 +1948,13 @@ const Actions = {
     const isPagamentoFatura = categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA;
     const cartaoFaturaId = isPagamentoFatura ? Number(document.getElementById('ntCartaoFatura').value) || null : null;
 
+    const contaSelecionada = !isCartao ? STATE.contas.find(c => c.id === carteiraId) : null;
+    const formaPagamento = isCartao ? 'Cartão de Crédito'
+      : (contaSelecionada && contaSelecionada.tipo === 'Conta Bancária') ? document.getElementById('ntFormaPagamento').value
+      : 'Outro';
     const lanc = {
       id: uuid(), data, tipo, categoriaId, subcategoriaId, descricao, valor,
-      formaPagamento: isCartao ? 'Cartão de Crédito' : 'Outro', carteiraId,
+      formaPagamento, carteiraId,
       qtdParcelas, parcelaAtual: 1, cartaoFaturaId,
     };
     STATE.lancamentos.push(lanc);
@@ -1959,9 +1993,13 @@ const Actions = {
     // Remove as parcelas antigas deste lançamento — se for cartão, são recriadas do zero abaixo.
     STATE.parcelas = STATE.parcelas.filter(p => p.lancamentoId !== id);
 
+    const contaSelecionadaEd = !isCartao ? STATE.contas.find(c => c.id === carteiraId) : null;
+    const formaPagamentoEd = isCartao ? 'Cartão de Crédito'
+      : (contaSelecionadaEd && contaSelecionadaEd.tipo === 'Conta Bancária') ? document.getElementById('etFormaPagamento').value
+      : 'Outro';
     Object.assign(l, {
       tipo, data, categoriaId, subcategoriaId, descricao, valor,
-      formaPagamento: isCartao ? 'Cartão de Crédito' : 'Outro', carteiraId,
+      formaPagamento: formaPagamentoEd, carteiraId,
       qtdParcelas, parcelaAtual: 1, cartaoFaturaId,
     });
 
