@@ -731,6 +731,45 @@ function saldoInvestidoAteData(dataLimiteISO) {
     .reduce((s, c) => s + AppLogic.centavos(AppLogic.calcularSaldoConta(c.id, lancsAteData) + (c.saldoInicial || 0)), 0));
 }
 
+// Rolling forecast: para cada mês futuro que já tem orçamento cadastrado, soma por subcategoria o
+// MAIOR valor entre orçado e o que já está de fato comprometido/lançado (parcela de cartão, receita
+// já registrada) — o que já é garantido nunca é "desfeito" pelo orçamento, e o que ainda não
+// aconteceu assume o valor planejado. Encadeado mês a mês a partir do saldo disponível de hoje.
+// Diferente da projeção conservadora acima (que só soma o que já foi lançado, nunca orçamento): aqui
+// a pergunta é "se eu seguir o orçamento à risca, onde eu chego" — por isso pode ficar mais otimista
+// ou mais pessimista que a realidade, dependendo de quão realista está o orçamento cadastrado.
+const CATEGORIAS_CORTAVEIS = [2, 3, 4]; // Gastos Variáveis, Despesas Temporárias, Assinatura — exclui Fixos (1) e Investimento (5)
+function forecastMes(ano, mes) {
+  const linhas = AppLogic.calcularOrcadoRealizado(STATE.lancamentos, STATE.orcamentos, ano, mes, STATE.parcelas);
+  let despesaCents = 0, receitaCents = 0;
+  const candidatosCorte = [];
+  linhas.forEach(l => {
+    const valorCents = AppLogic.centavos(Math.max(l.orcado, l.realizado));
+    if (l.tipo === 'Despesa') {
+      despesaCents += valorCents;
+      if (CATEGORIAS_CORTAVEIS.includes(l.categoriaId) && l.orcado > 0) {
+        candidatosCorte.push({ categoriaId: l.categoriaId, subcategoriaId: l.subcategoriaId, orcado: l.orcado });
+      }
+    } else {
+      receitaCents += valorCents;
+    }
+  });
+  candidatosCorte.sort((a, b) => b.orcado - a.orcado);
+  return { despesa: AppLogic.reais(despesaCents), receita: AppLogic.reais(receitaCents), candidatosCorte };
+}
+// Todos os meses (ano/mês) posteriores ao mês atual que já têm ao menos um orçamento cadastrado —
+// o forecast só cobre o que a própria pessoa já planejou, nunca inventa um mês sem orçamento.
+function mesesOrcamentoFuturo() {
+  const hoje = new Date();
+  const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
+  const set = new Set();
+  STATE.orcamentos.forEach(o => {
+    const chave = o.ano + '-' + String(o.mes).padStart(2, '0');
+    if (chave > chaveHoje) set.add(chave);
+  });
+  return Array.from(set).sort().map(chave => { const [y, m] = chave.split('-').map(Number); return { chave, ano: y, mes: m }; });
+}
+
 function mesNavHtml() {
   const { ano, mes } = VIEW;
   return `<div style="display:flex; align-items:center; gap:8px;">
@@ -1284,6 +1323,17 @@ const Render = {
     const maxVal = Math.max(1, ...janela.map(e => Math.max(e.receita, e.despesa)));
     const maxSaldoReal = Math.max(1, ...janela.map(e => Math.abs(e.saldoReal)));
 
+    // Forecast por orçamento (ver forecastMes/mesesOrcamentoFuturo acima) — cobre todos os meses
+    // futuros que já têm orçamento cadastrado, encadeados a partir do saldo disponível de hoje.
+    const mesesForecast = mesesOrcamentoFuturo();
+    let saldoForecastRunning = saldoDisponivel();
+    const forecastSerie = mesesForecast.map(({ ano: y, mes: m }) => {
+      const { despesa, receita, candidatosCorte } = forecastMes(y, m);
+      saldoForecastRunning = AppLogic.reais(AppLogic.centavos(saldoForecastRunning) + AppLogic.centavos(receita) - AppLogic.centavos(despesa));
+      return { y, m, despesa, receita, saldo: saldoForecastRunning, candidatosCorte };
+    });
+    const maxSaldoForecast = Math.max(1, ...forecastSerie.map(e => Math.abs(e.saldo)));
+
     el.innerHTML = `
       <div class="topbar"><h1>Relatórios</h1>${mesNavHtml()}</div>
       <div class="tabs">
@@ -1341,6 +1391,34 @@ const Render = {
         </div>
         <div class="stat-sub" style="margin-top:8px;">Barras acima da linha = saldo positivo; abaixo = conta no vermelho de verdade (cheque especial). Barras "(proj.)" somam só o que já foi lançado (parcelas comprometidas e receitas com data futura já registradas) — não incluem renda que ainda não foi lançada. Se ficarem negativas, é um alerta para planejar, não um fato consumado.</div>
       </div>
+
+      <div class="section-title">Forecast por orçamento (se você seguir o orçamento à risca)</div>
+      <div class="logic-note"><span>ℹ️</span><div>Diferente do gráfico acima: aqui cada mês futuro assume o <b>valor orçado</b> onde ainda não há nada lançado, e usa o que já está comprometido (parcela de cartão, lançamento real) sempre que isso for maior que o orçado — nada já garantido é "apagado" pelo orçamento. Cobre todos os meses com orçamento cadastrado. Só é tão confiável quanto o seu orçamento estiver realista.</div></div>
+      ${forecastSerie.length === 0 ? '<div class="card stat-sub">Nenhum mês futuro com orçamento cadastrado ainda.</div>' : `
+      <div class="card">
+        <div class="bars-zero">
+          ${forecastSerie.map(e => {
+            const isPos = e.saldo >= 0;
+            const pct = Math.max(4, Math.round((Math.abs(e.saldo) / maxSaldoForecast) * 100));
+            return `<div class="bar-col-zero">
+              <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(e.saldo)}</div><div class="bar-d" style="height:${pct}%; background:var(--accent2); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div>` : ''}</div>
+              <div class="bar-zero-axis"></div>
+              <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--amber); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div><div class="bar-value">${fmtMoeda(e.saldo)}</div>` : ''}</div>
+              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)} (orç.)</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="stat-sub" style="margin-top:8px;">Barras azuis = saldo previsto positivo; laranja = negativo (alerta de planejamento, com base no orçamento — não é fato consumado).</div>
+        ${(() => {
+          const negativos = forecastSerie.filter(e => e.saldo < 0 && e.candidatosCorte.length);
+          if (!negativos.length) return '';
+          return `<div class="banner warn" style="margin-top:12px;"><span>⚠️</span><div>
+            ${negativos.map(e => `<div style="margin-bottom:8px;"><b>${MESES_NOMES[e.m]}/${e.y}</b> fecha negativo no forecast — maiores oportunidades de corte (gastos variáveis, não fixos):<br>
+              ${e.candidatosCorte.slice(0, 3).map(c => `${subcategoriaNome(c.subcategoriaId)} (${categoriaNome(c.categoriaId)}) — orçado ${fmtMoeda(c.orcado)}`).join(' · ')}
+            </div>`).join('')}
+          </div></div>`;
+        })()}
+      </div>`}
 
       <div class="section-title">Orçado x realizado por subcategoria (mês selecionado: ${MESES_NOMES[mes]}/${ano})</div>
       <div class="logic-note"><span>ℹ️</span><div>Este comparativo é sempre por mês (orçamento é definido mês a mês) — use as setas no topo para trocar o mês.</div></div>
