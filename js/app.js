@@ -1975,6 +1975,24 @@ const Actions = {
         valor: g.valor, numero: g.numero, qtd: g.qtd, ano: g.ano, mes: g.mes,
       }));
     }
+
+    // Aporte em investimento (categoria 💰Investimento: Renda Fixa, Renda Variável, Bolsa, Consórcio,
+    // DinDin, Reaplicação de rendimento) saindo de uma conta comum é uma transferência de 2 pernas —
+    // dinheiro sai da conta comum (esta Despesa) e entra na conta Investimento. Antes só a perna de
+    // saída era criada por aqui; a de entrada tinha que ser lançada à parte e já ficou faltando 2
+    // vezes na prática. Agora a perna de entrada é criada junto, automaticamente.
+    if (!isCartao && tipo === 'Despesa' && categoriaId === 5) {
+      const contaInvestimento = STATE.contas.find(c => c.tipo === 'Investimento');
+      if (contaInvestimento && contaInvestimento.id !== carteiraId) {
+        STATE.lancamentos.push({
+          id: uuid(), data, tipo: 'Receita', categoriaId, subcategoriaId,
+          descricao: descricao + ' (entrada na conta Investimento)', valor,
+          formaPagamento: 'Transferência', carteiraId: contaInvestimento.id,
+          qtdParcelas: 1, parcelaAtual: 1, cartaoFaturaId: null,
+        });
+      }
+    }
+
     await persist();
     Modals.close('novaTransacao');
     Nav.show(Nav.atual);
