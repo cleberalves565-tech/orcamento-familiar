@@ -1206,8 +1206,6 @@ const Render = {
 
   render_investimentos() {
     const el = document.getElementById('screen-investimentos');
-    const totalAtual = AppLogic.reais(STATE.investimentos.reduce((s, i) => s + AppLogic.centavos(i.valorAtual), 0));
-    const totalAportado = AppLogic.reais(STATE.investimentos.reduce((s, i) => s + AppLogic.centavos(i.valorAportado), 0));
 
     // Base correta: lançamentos DA PRÓPRIA conta Investimento (não da categoria "Investimento" em
     // qualquer conta). Uma transferência de aporte tem 2 pernas — saída na Conta Corrente e entrada na
@@ -1219,31 +1217,50 @@ const Render = {
     const hojeISO = new Date().toISOString().slice(0, 10);
     const contaInvestimento = STATE.contas.find(c => c.tipo === 'Investimento');
     const lancsInv = contaInvestimento ? STATE.lancamentos.filter(l => l.carteiraId === contaInvestimento.id && l.data <= hojeISO) : [];
-    const aportesFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
-    const recebidoFluxo = AppLogic.reais(lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0));
-    const saldoFluxo = AppLogic.reais(AppLogic.centavos(aportesFluxo) - AppLogic.centavos(recebidoFluxo));
+
+    // "Seus ativos" era 100% manual (nome/aportado/atual digitados à mão) e por isso ficava sempre
+    // zerado — nada aqui empurrava o usuário a manter atualizado. Como hoje só existe 1 investimento
+    // de verdade (CDB, tudo passando pela conta Investimento), dá pra calcular sozinho a partir do que
+    // já está lançado. Patrimônio atual = tudo que entrou/saiu da conta Investimento (Receita−Despesa).
+    // Total aportado (principal) NÃO pode ser filtrado pela subcategoria do lado de quem RECEBE
+    // (carteira Investimento) — na prática, aporte novo e reaplicação de rendimento às vezes chegam
+    // com a mesma subcategoria (713), então essa marcação não é confiável nesse lado. O lado confiável
+    // é o de quem PAGA: a perna que sai de uma conta comum pra virar investimento sempre tem a
+    // subcategoria certa (747 = reaplicação de rendimento, qualquer outra = aporte genuíno de dinheiro
+    // novo). Por isso o principal é somado a partir de lá — e resgate (dinheiro saindo do investimento
+    // de volta pra uma conta comum) desconta desse principal, pra não inflar quando o CDB é resgatado.
+    // Rendimento acumulado = o que sobra (patrimônio atual − principal) — cobre tanto o rendimento já
+    // reaplicado quanto o que caiu direto na conta Investimento como Ganho.
+    const patrimonioAtualAuto = AppLogic.reais(
+      lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
+      - lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
+    );
+    const investimentoId = contaInvestimento ? contaInvestimento.id : null;
+    const aportesGenuinos = STATE.lancamentos.filter(l => l.tipo === 'Despesa' && l.categoriaId === 5 && l.subcategoriaId !== 747 && l.carteiraId !== investimentoId && l.data <= hojeISO);
+    const resgatesParaFora = STATE.lancamentos.filter(l => l.tipo === 'Receita' && l.categoriaId === 5 && l.subcategoriaId !== 747 && l.carteiraId !== investimentoId && l.data <= hojeISO);
+    const totalAportadoAuto = AppLogic.reais(
+      aportesGenuinos.reduce((s, l) => s + AppLogic.centavos(l.valor), 0) - resgatesParaFora.reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
+    );
+    const rendimentoAcumulado = AppLogic.reais(AppLogic.centavos(patrimonioAtualAuto) - AppLogic.centavos(totalAportadoAuto));
+    const rentabilidadeAuto = totalAportadoAuto > 0 ? (rendimentoAcumulado / totalAportadoAuto) * 100 : 0;
 
     el.innerHTML = `
       <div class="topbar"><h1>Investimentos</h1><button class="btn" onclick="Modals.openNovoAtivo()">+ Novo ativo</button></div>
 
-      <div class="section-title">Resumo pelo fluxo de caixa (automático, a partir dos seus lançamentos)</div>
-      <div class="grid grid-3">
-        <div class="card"><div class="stat-label">Total aportado (entradas na conta Investimento)</div><div class="stat-value up">${fmtMoeda(aportesFluxo)}</div><div class="stat-sub">${lancsInv.filter(l=>l.tipo==='Receita').length} lançamentos</div></div>
-        <div class="card"><div class="stat-label">Total resgatado (saídas da conta Investimento)</div><div class="stat-value down">${fmtMoeda(recebidoFluxo)}</div><div class="stat-sub">${lancsInv.filter(l=>l.tipo==='Despesa').length} lançamentos</div></div>
-        <div class="card"><div class="stat-label">Saldo líquido investido</div><div class="stat-value">${fmtMoeda(saldoFluxo)}</div><div class="stat-sub">aportado − resgatado (bate com o Painel geral)</div></div>
-      </div>
-      <div class="logic-note"><span>ℹ️</span><div>Este resumo é calculado automaticamente a partir dos lançamentos feitos <b>na própria conta Investimento</b> (entrada = aporte/reaplicação/saldo inicial, saída = resgate) — nada para digitar de novo aqui. Ele mostra <b>quanto dinheiro entrou e saiu dessa conta</b>, não o valor de mercado atual do investimento (isso nenhum app descobre sozinho — só seu extrato do banco sabe).</div></div>
-
-      <div class="section-title">Seus ativos (cadastro manual, para acompanhar valor de mercado)</div>
+      <div class="section-title">Patrimônio investido (automático, a partir dos seus lançamentos)</div>
       <div class="grid grid-4">
-        <div class="card"><div class="stat-label">Patrimônio atual</div><div class="stat-value">${fmtMoeda(totalAtual)}</div></div>
-        <div class="card"><div class="stat-label">Total aportado (cadastrado)</div><div class="stat-value">${fmtMoeda(totalAportado)}</div></div>
-        <div class="card"><div class="stat-label">Rentabilidade</div><div class="stat-value ${totalAtual>=totalAportado?'up':'down'}">${totalAportado>0?(((totalAtual-totalAportado)/totalAportado)*100).toFixed(1):'0.0'}%</div></div>
-        <div class="card"><div class="stat-label">Ativos</div><div class="stat-value">${STATE.investimentos.length}</div></div>
+        <div class="card"><div class="stat-label">Patrimônio atual</div><div class="stat-value">${fmtMoeda(patrimonioAtualAuto)}</div></div>
+        <div class="card"><div class="stat-label">Total aportado (principal)</div><div class="stat-value">${fmtMoeda(totalAportadoAuto)}</div></div>
+        <div class="card"><div class="stat-label">Rendimento acumulado</div><div class="stat-value ${rendimentoAcumulado>=0?'up':'down'}">${fmtMoeda(rendimentoAcumulado)}</div></div>
+        <div class="card"><div class="stat-label">Rentabilidade</div><div class="stat-value ${rentabilidadeAuto>=0?'up':'down'}">${rentabilidadeAuto.toFixed(1)}%</div></div>
       </div>
+      <div class="logic-note"><span>ℹ️</span><div>Calculado automaticamente a partir dos lançamentos feitos <b>na própria conta Investimento</b> — nada pra digitar de novo aqui. "Total aportado" conta só dinheiro novo (exclui rendimento reinvestido); "Rendimento acumulado" é esse rendimento reinvestido. Se algum rendimento foi recebido mas <b>não</b> reinvestido (virou dinheiro comum), ele não entra aqui, porque já deixou de ser patrimônio investido.</div></div>
+
+      ${STATE.investimentos.length ? `
+      <div class="section-title" style="margin-top:20px;">Ativos com cadastro manual (detalhamento opcional)</div>
       <table class="table"><tr><th>Nome</th><th>Tipo</th><th>Aportado</th><th>Valor atual</th></tr>
-      ${STATE.investimentos.map(i => `<tr><td>${i.nome}</td><td>${i.tipo}</td><td>${fmtMoeda(i.valorAportado)}</td><td>${fmtMoeda(i.valorAtual)}</td></tr>`).join('') || '<tr><td colspan="4" class="stat-sub">Nenhum ativo cadastrado ainda — clique em "+ Novo ativo" e use o resumo acima como referência do que já foi aportado.</td></tr>'}
-      </table>`;
+      ${STATE.investimentos.map(i => `<tr><td>${i.nome}</td><td>${i.tipo}</td><td>${fmtMoeda(i.valorAportado)}</td><td>${fmtMoeda(i.valorAtual)}</td></tr>`).join('')}
+      </table>` : ''}`;
   },
 
   relatorioModo: 'mensal',
