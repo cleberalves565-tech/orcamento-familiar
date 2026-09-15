@@ -145,14 +145,14 @@ label{font-size:12px; color:var(--text2); display:block; margin-bottom:5px;}
 .progress{height:8px; background:var(--card2); border-radius:100px; overflow:hidden; margin-top:8px;}
 .progress-fill{height:100%; border-radius:100px;}
 
-.bars{display:flex; align-items:flex-end; gap:6px; height:120px; margin-top:10px;}
-.bar-col{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; gap:4px;}
+.bars{display:flex; align-items:flex-end; gap:6px; height:120px; margin-top:10px; overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch;}
+.bar-col{flex:1 0 30px; min-width:30px; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; gap:4px;}
 .bar{width:100%; border-radius:4px 4px 0 0;}
 .bar-label{font-size:10px; color:var(--text3);}
 .bar-value{font-size:9px; color:var(--text2); white-space:nowrap;}
 
-.bars-zero{display:flex; align-items:stretch; gap:6px; height:160px; margin-top:10px;}
-.bar-col-zero{flex:1; display:flex; flex-direction:column; align-items:center; height:100%; gap:4px;}
+.bars-zero{display:flex; align-items:stretch; gap:6px; height:160px; margin-top:10px; overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch;}
+.bar-col-zero{flex:1 0 30px; min-width:30px; display:flex; flex-direction:column; align-items:center; height:100%; gap:4px;}
 .bar-zero-top{flex:1; width:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center;}
 .bar-zero-axis{width:100%; height:1px; background:var(--border); flex-shrink:0;}
 .bar-zero-bottom{flex:1; width:100%; display:flex; flex-direction:column; justify-content:flex-start; align-items:center;}
