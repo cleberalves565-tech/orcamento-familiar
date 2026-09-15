@@ -1022,17 +1022,25 @@ const Render = {
   render_contas() {
     const el = document.getElementById('screen-contas');
     const lancsAteHoje = lancamentosAteHoje();
-    const temNegativa = STATE.contas.some(c => (AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0)) < 0);
+    const contasAtivas = STATE.contas.filter(c => c.ativa !== false);
+    const contasInativas = STATE.contas.filter(c => c.ativa === false);
+    const temNegativa = contasAtivas.some(c => (AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0)) < 0);
+    function cardConta(c, inativa) {
+      const saldo = AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0);
+      return `<div class="card" style="${inativa ? 'opacity:.5;' : ''}"><div class="stat-label">${c.nome}${inativa ? ' (desativada)' : ''}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub" style="display:flex; justify-content:space-between; align-items:center;">${c.tipo}<span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaAtiva(${c.id})">${inativa ? 'reativar' : 'desativar'}</span></div></div>`;
+    }
     el.innerHTML = `
       <div class="topbar"><h1>Contas</h1><button class="btn" onclick="Modals.openNovaConta()">+ Nova conta</button></div>
-      <div class="grid grid-3">${STATE.contas.map(c => {
-        const saldo = AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0);
-        return `<div class="card"><div class="stat-label">${c.nome}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub">${c.tipo}</div></div>`;
-      }).join('') || '<div class="card stat-sub">Nenhuma conta cadastrada.</div>'}
+      <div class="grid grid-3">${contasAtivas.map(c => cardConta(c, false)).join('') || '<div class="card stat-sub">Nenhuma conta cadastrada.</div>'}
       </div>
+      ${contasInativas.length ? `<div style="margin-top:10px;">
+        <span style="font-size:12px; color:var(--text3); cursor:pointer; text-decoration:underline;" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'grid' : 'none';">${contasInativas.length} conta(s) desativada(s) — mostrar</span>
+        <div class="grid grid-3" style="display:none; margin-top:8px;">${contasInativas.map(c => cardConta(c, true)).join('')}</div>
+      </div>` : ''}
       <div class="section-title">Saldo total</div>
-      <div class="card"><div class="stat-value" style="font-size:26px;">${fmtMoeda(saldoTotalContas())}</div><div class="stat-sub">em ${STATE.contas.length} contas ativas</div></div>
-      ${temNegativa ? `<div class="logic-note"><span>ℹ️</span><div><b>Saldo negativo aqui não é necessariamente um erro.</b> O saldo de cada conta soma as receitas e subtrai as despesas dos lançamentos importados, sem um "saldo inicial" de partida. Se a planilha original não registrava as transferências entre suas próprias contas (ex.: dinheiro que saía da Conta Corrente e ia pro PIX), a conta de destino aparece artificialmente negativa — o gasto foi real, só a origem do dinheiro não foi registrada. Posso corrigir isso quando quiser, definindo o saldo real de hoje como novo ponto de partida — é só pedir.</div></div>` : ''}`;
+      <div class="card"><div class="stat-value" style="font-size:26px;">${fmtMoeda(saldoTotalContas())}</div><div class="stat-sub">em ${contasAtivas.length} conta(s) ativa(s)</div></div>
+      ${temNegativa ? `<div class="logic-note"><span>ℹ️</span><div><b>Saldo negativo aqui não é necessariamente um erro.</b> O saldo de cada conta soma as receitas e subtrai as despesas dos lançamentos importados, sem um "saldo inicial" de partida. Se a planilha original não registrava as transferências entre suas próprias contas (ex.: dinheiro que saía da Conta Corrente e ia pro PIX), a conta de destino aparece artificialmente negativa — o gasto foi real, só a origem do dinheiro não foi registrada. Posso corrigir isso quando quiser, definindo o saldo real de hoje como novo ponto de partida — é só pedir.</div></div>` : ''}
+      <div class="logic-note"><span>ℹ️</span><div>Pix Central e Dinheiro aparecem desativadas acima por causa do histórico — nenhuma das duas é uma conta de verdade, são formas de pagamento dentro de uma conta bancária (ex.: Conta Corrente), escolhidas na hora de lançar a transação. Por isso não entram mais no seletor de nova transação nem podem ser criadas de novo.</div></div>`;
   },
 
   cartoesFiltroMeses: 12,
@@ -1730,10 +1738,12 @@ const Modals = {
 
   openNovaTransacao() {
     const catOpts = STATE.categorias.map(c => `<option value="${c.id}">${CATEGORIA_ICONS[c.id]||''} ${c.nome}</option>`).join('');
-    // "Digital" (ex.: PIX Central) fica de fora do seletor de propósito — Pix não é um lugar onde o
-    // dinheiro mora, é só a forma como ele sai da conta de verdade. Ver Modals.refreshFormaPagamento.
+    // "Digital"/"Físico" (PIX Central, Dinheiro) ficam de fora do seletor de conta — nenhuma das duas é
+    // um lugar onde o dinheiro mora, são só a forma como ele sai da conta de verdade (ex.: Conta
+    // Corrente). Contas desativadas (Modals.CONTA_ATIVA) também somem daqui — mesma regra de Categorias.
+    // Ver Modals.refreshFormaPagamento.
     const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}">${c.nome}</option>`)
-      .concat(STATE.contas.filter(c => c.tipo !== 'Digital').map(c => `<option value="conta_${c.id}">${c.nome}</option>`)).join('');
+      .concat(STATE.contas.filter(Modals.contaSelecionavel).map(c => `<option value="conta_${c.id}">${c.nome}</option>`)).join('');
     const cartaoFaturaOpts = STATE.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
     document.getElementById('modalNovaTransacaoBody').innerHTML = `
       <div class="modal-head"><h3>Nova transação</h3><button class="close-x" onclick="Modals.close('novaTransacao')">✕</button></div>
@@ -1756,6 +1766,7 @@ const Modals = {
         <select id="ntFormaPagamento">
           <option value="Débito">Débito</option>
           <option value="Pix">Pix</option>
+          <option value="Dinheiro">Dinheiro</option>
         </select></div>
       <div class="field" id="ntCampoCartaoFatura" style="display:none;"><label>Qual cartão esta fatura está pagando?</label><select id="ntCartaoFatura">${cartaoFaturaOpts}</select></div>
       <div class="field" id="campoParcelas" style="display:none;"><label>Número de parcelas</label>
@@ -1824,7 +1835,8 @@ const Modals = {
     document.getElementById('modalNovaContaBody').innerHTML = `
       <div class="modal-head"><h3>Nova conta</h3><button class="close-x" onclick="Modals.close('novaConta')">✕</button></div>
       <div class="field"><label>Nome da conta</label><input id="ncNome" placeholder="Ex: Nubank, Itaú, BB"></div>
-      <div class="field"><label>Tipo</label><select id="ncTipo"><option>Conta Bancária</option><option>Digital</option><option>Físico</option><option>Investimento</option></select></div>
+      <div class="field"><label>Tipo</label><select id="ncTipo"><option>Conta Bancária</option><option>Investimento</option></select></div>
+      <div class="logic-note"><span>ℹ️</span><div>Pix e Dinheiro não aparecem aqui de propósito — são formas de pagamento, não contas onde o dinheiro mora. Ao lançar uma transação, escolha a conta bancária de onde o dinheiro realmente saiu (ex.: Conta Corrente) e depois a forma de pagamento (Débito, Pix ou Dinheiro).</div></div>
       <div class="field"><label>Saldo atual (R$)</label><input id="ncSaldo" type="number" step="0.01" placeholder="0,00"></div>
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarConta()">Adicionar conta</button>`;
     Modals.open('novaConta');
@@ -1867,6 +1879,12 @@ const Modals = {
   // já contada na parcela, entraria em dobro) e Ajuste de Saldo (correção pontual de reconciliação,
   // não um gasto/ganho recorrente pra planejar mês a mês). As duas já são excluídas da tela de
   // Orçamentos (ver calcularOrcadoRealizado) — aqui é só espelhar a mesma regra na edição.
+  // Uma conta só entra no seletor de "Nova transação"/"Editar transação" se for um lugar onde o
+  // dinheiro realmente mora (Conta Bancária, Investimento) e estiver ativa. PIX e Dinheiro são formas
+  // de pagamento (ver ntFormaPagamento/etFormaPagamento), não contas — por isso os tipos "Digital" e
+  // "Físico" nunca aparecem aqui, mesmo que uma conta desse tipo ainda exista em STATE.contas por
+  // motivo histórico.
+  contaSelecionavel(c) { return c.ativa !== false && !['Digital', 'Físico'].includes(c.tipo); },
   CATEGORIAS_FORA_DO_ORCAMENTO: [6, 8],
   openEditarOrcamento() {
     const { ano, mes } = VIEW;
@@ -1944,12 +1962,13 @@ const Modals = {
     const descEsc = String(l.descricao).replace(/"/g, '&quot;');
     const catOpts = STATE.categorias.map(c => `<option value="${c.id}" ${c.id === l.categoriaId ? 'selected' : ''}>${CATEGORIA_ICONS[c.id] || ''} ${c.nome}</option>`).join('');
     const isCartaoAtual = l.formaPagamento === 'Cartão de Crédito';
-    // Se este lançamento antigo ainda estiver na conta "PIX Central" (ou outra "Digital"), ela
-    // continua na lista só pra não sumir a seleção atual — mas não aparece pra novos lançamentos.
-    const contaAtualDigitalForaDaLista = STATE.contas.find(c => c.id === l.carteiraId && c.tipo === 'Digital');
-    const contasParaMostrar = contaAtualDigitalForaDaLista
-      ? STATE.contas.filter(c => c.tipo !== 'Digital').concat([contaAtualDigitalForaDaLista])
-      : STATE.contas.filter(c => c.tipo !== 'Digital');
+    // Se este lançamento antigo ainda estiver numa conta que não é mais selecionável (PIX Central,
+    // Dinheiro, ou qualquer conta desativada), ela continua na lista só pra não sumir a seleção atual —
+    // mas não aparece pra novos lançamentos nem pra editar outros já corretos.
+    const contaAtualForaDaLista = STATE.contas.find(c => c.id === l.carteiraId && !Modals.contaSelecionavel(c));
+    const contasParaMostrar = contaAtualForaDaLista
+      ? STATE.contas.filter(Modals.contaSelecionavel).concat([contaAtualForaDaLista])
+      : STATE.contas.filter(Modals.contaSelecionavel);
     const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}" ${isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)
       .concat(contasParaMostrar.map(c => `<option value="conta_${c.id}" ${!isCartaoAtual && c.id === l.carteiraId ? 'selected' : ''}>${c.nome}</option>`)).join('');
     const cartaoFaturaAtual = l.categoriaId === AppLogic.CATEGORIA_PAGAMENTO_FATURA ? resolverCartaoDaFatura(l) : null;
@@ -1977,6 +1996,7 @@ const Modals = {
         <select id="etFormaPagamento">
           <option value="Débito" ${l.formaPagamento==='Débito'?'selected':''}>Débito</option>
           <option value="Pix" ${l.formaPagamento==='Pix'?'selected':''}>Pix</option>
+          <option value="Dinheiro" ${l.formaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
         </select></div>
       <div class="field" id="etCampoCartaoFatura" style="display:none;"><label>Qual cartão esta fatura está pagando?</label><select id="etCartaoFatura">${cartaoFaturaOpts}</select></div>
       <div class="field" id="etCampoParcelas" style="display:none;"><label>Número de parcelas</label>
@@ -2226,6 +2246,17 @@ const Actions = {
       });
     });
     await persist(); Modals.close('editarOrcamento'); Nav.show('orcamentos');
+  },
+  async toggleContaAtiva(id) {
+    const c = STATE.contas.find(c => c.id === id);
+    if (!c) return;
+    const vaiDesativar = c.ativa !== false;
+    if (vaiDesativar) {
+      const qtd = STATE.lancamentos.filter(l => l.carteiraId === id).length;
+      if (!confirm(`Desativar "${c.nome}"? Ela some do seletor de nova transação, mas os ${qtd} lançamento(s) já feitos nela e o saldo continuam intactos e visíveis aqui (em "contas desativadas").`)) return;
+    }
+    c.ativa = !vaiDesativar;
+    await persist(); Nav.show('contas');
   },
   async toggleSubcategoriaAtiva(id) {
     const s = STATE.subcategorias.find(s => s.id === id);
