@@ -998,10 +998,9 @@ const Render = {
     // totalDespesasMes. Mas pra dar visão de quanto do dinheiro movimentado no mês virou patrimônio em
     // vez de virar gasto, mostra à parte, como % do total de despesas (não como fatia do mesmo bolo —
     // por isso as % de cima continuam somando ~100% sozinhas, sem essa linha).
-    const contaInvestimentoPainel = STATE.contas.find(c => c.tipo === 'Investimento');
-    const investimentoContaIdPainel = contaInvestimentoPainel ? contaInvestimentoPainel.id : null;
+    const contasInvestimentoPainelIds = new Set(STATE.contas.filter(c => c.tipo === 'Investimento').map(c => c.id));
     const aportesMesCents = itensMesPainel
-      .filter(i => i.tipo === 'Despesa' && i.categoriaId === 5 && i.subcategoriaId !== 747 && i.carteiraId !== investimentoContaIdPainel)
+      .filter(i => i.tipo === 'Despesa' && i.categoriaId === 5 && i.subcategoriaId !== 747 && !contasInvestimentoPainelIds.has(i.carteiraId))
       .reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
     const aportesMes = AppLogic.reais(aportesMesCents);
     const investimentoPct = despesas > 0 ? Math.round((aportesMesCents / AppLogic.centavos(despesas)) * 100) : 0;
@@ -1371,52 +1370,49 @@ const Render = {
     // Também só até hoje — mesma razão do saldoDisponivel/saldoInvestido: um aporte já lançado com
     // data futura não pode contar como "já entrou" na conta Investimento antes da data chegar.
     const hojeISO = new Date().toISOString().slice(0, 10);
-    const contaInvestimento = STATE.contas.find(c => c.tipo === 'Investimento');
-    const lancsInv = contaInvestimento ? STATE.lancamentos.filter(l => l.carteiraId === contaInvestimento.id && l.data <= hojeISO) : [];
 
-    // "Seus ativos" era 100% manual (nome/aportado/atual digitados à mão) e por isso ficava sempre
-    // zerado — nada aqui empurrava o usuário a manter atualizado. Como hoje só existe 1 investimento
-    // de verdade (CDB, tudo passando pela conta Investimento), dá pra calcular sozinho a partir do que
-    // já está lançado. Patrimônio atual = tudo que entrou/saiu da conta Investimento (Receita−Despesa).
-    // Total aportado (principal) NÃO pode ser filtrado pela subcategoria do lado de quem RECEBE
-    // (carteira Investimento) — na prática, aporte novo e reaplicação de rendimento às vezes chegam
-    // com a mesma subcategoria (713), então essa marcação não é confiável nesse lado. O lado confiável
-    // é o de quem PAGA: a perna que sai de uma conta comum pra virar investimento sempre tem a
-    // subcategoria certa (747 = reaplicação de rendimento, qualquer outra = aporte genuíno de dinheiro
-    // novo). Por isso o principal é somado a partir de lá — e resgate (dinheiro saindo do investimento
-    // de volta pra uma conta comum) desconta desse principal, pra não inflar quando o CDB é resgatado.
-    // Rendimento acumulado = o que sobra (patrimônio atual − principal) — cobre tanto o rendimento já
-    // reaplicado quanto o que caiu direto na conta Investimento como Ganho.
-    const patrimonioAtualAuto = AppLogic.reais(
-      lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
-      - lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
-    );
-    const investimentoId = contaInvestimento ? contaInvestimento.id : null;
-    const aportesGenuinos = STATE.lancamentos.filter(l => l.tipo === 'Despesa' && l.categoriaId === 5 && l.subcategoriaId !== 747 && l.carteiraId !== investimentoId && l.data <= hojeISO);
-    const resgatesParaFora = STATE.lancamentos.filter(l => l.tipo === 'Receita' && l.categoriaId === 5 && l.subcategoriaId !== 747 && l.carteiraId !== investimentoId && l.data <= hojeISO);
+    // Patrimônio atual por conta é 100% confiável (Receita−Despesa dentro da própria conta, sem
+    // precisar interpretar subcategoria) — por isso dá pra mostrar por conta sem risco. "Total
+    // aportado"/"Rendimento"/"Rentabilidade" já não são assim: dependem de saber se cada entrada foi
+    // aporte novo ou reaplicação de rendimento reinvestido, e essa marcação só é confiável do lado de
+    // quem PAGA (a perna que sai de uma conta comum) — do lado de quem recebe (dentro da conta de
+    // investimento), aporte e reaplicação historicamente chegaram com a mesma subcategoria, então
+    // tentar separar por conta a partir daí dava número errado (testado contra os dados reais antes
+    // de publicar). Por isso essas 3 métricas ficam em conjunto (somando todas as contas de
+    // investimento), e só o Patrimônio atual é quebrado por conta.
+    function patrimonioAtualConta(conta) {
+      const lancsInv = STATE.lancamentos.filter(l => l.carteiraId === conta.id && l.data <= hojeISO);
+      return AppLogic.reais(
+        lancsInv.filter(l => l.tipo === 'Receita').reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
+        - lancsInv.filter(l => l.tipo === 'Despesa').reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
+      );
+    }
+    const contasInvestimento = STATE.contas.filter(c => c.tipo === 'Investimento' && c.ativa !== false);
+    const investimentoIds = new Set(contasInvestimento.map(c => c.id));
+    const patrimonioAtualTotal = AppLogic.reais(contasInvestimento.reduce((s, c) => s + AppLogic.centavos(patrimonioAtualConta(c)), 0));
+    const aportesGenuinos = STATE.lancamentos.filter(l => l.tipo === 'Despesa' && l.categoriaId === 5 && l.subcategoriaId !== 747 && !investimentoIds.has(l.carteiraId) && l.data <= hojeISO);
+    const resgatesParaFora = STATE.lancamentos.filter(l => l.tipo === 'Receita' && l.categoriaId === 5 && l.subcategoriaId !== 747 && !investimentoIds.has(l.carteiraId) && l.data <= hojeISO);
     const totalAportadoAuto = AppLogic.reais(
       aportesGenuinos.reduce((s, l) => s + AppLogic.centavos(l.valor), 0) - resgatesParaFora.reduce((s, l) => s + AppLogic.centavos(l.valor), 0)
     );
-    const rendimentoAcumulado = AppLogic.reais(AppLogic.centavos(patrimonioAtualAuto) - AppLogic.centavos(totalAportadoAuto));
+    const rendimentoAcumulado = AppLogic.reais(AppLogic.centavos(patrimonioAtualTotal) - AppLogic.centavos(totalAportadoAuto));
     const rentabilidadeAuto = totalAportadoAuto > 0 ? (rendimentoAcumulado / totalAportadoAuto) * 100 : 0;
 
     el.innerHTML = `
-      <div class="topbar"><h1>Investimentos</h1><button class="btn" onclick="Modals.openNovoAtivo()">+ Novo ativo</button></div>
-
+      <div class="topbar"><h1>Investimentos</h1></div>
       <div class="section-title">Patrimônio investido (automático, a partir dos seus lançamentos)</div>
+      ${contasInvestimento.length === 0 ? '<div class="card stat-sub">Nenhuma conta tipo Investimento cadastrada ainda — crie uma em Contas pra começar a acompanhar.</div>' : `
       <div class="grid grid-4">
-        <div class="card"><div class="stat-label">Patrimônio atual</div><div class="stat-value">${fmtMoeda(patrimonioAtualAuto)}</div></div>
+        <div class="card"><div class="stat-label">Patrimônio atual${contasInvestimento.length > 1 ? ' (total)' : ''}</div><div class="stat-value">${fmtMoeda(patrimonioAtualTotal)}</div></div>
         <div class="card"><div class="stat-label">Total aportado (principal)</div><div class="stat-value">${fmtMoeda(totalAportadoAuto)}</div></div>
         <div class="card"><div class="stat-label">Rendimento acumulado</div><div class="stat-value ${rendimentoAcumulado>=0?'up':'down'}">${fmtMoeda(rendimentoAcumulado)}</div></div>
         <div class="card"><div class="stat-label">Rentabilidade</div><div class="stat-value ${rentabilidadeAuto>=0?'up':'down'}">${rentabilidadeAuto.toFixed(1)}%</div></div>
-      </div>
-      <div class="logic-note"><span>ℹ️</span><div>Calculado automaticamente a partir dos lançamentos feitos <b>na própria conta Investimento</b> — nada pra digitar de novo aqui. "Total aportado" conta só dinheiro novo (exclui rendimento reinvestido); "Rendimento acumulado" é esse rendimento reinvestido. Se algum rendimento foi recebido mas <b>não</b> reinvestido (virou dinheiro comum), ele não entra aqui, porque já deixou de ser patrimônio investido.</div></div>
-
-      ${STATE.investimentos.length ? `
-      <div class="section-title" style="margin-top:20px;">Ativos com cadastro manual (detalhamento opcional)</div>
-      <table class="table"><tr><th>Nome</th><th>Tipo</th><th>Aportado</th><th>Valor atual</th></tr>
-      ${STATE.investimentos.map(i => `<tr><td>${i.nome}</td><td>${i.tipo}</td><td>${fmtMoeda(i.valorAportado)}</td><td>${fmtMoeda(i.valorAtual)}</td></tr>`).join('')}
-      </table>` : ''}`;
+      </div>`}
+      <div class="logic-note"><span>ℹ️</span><div>Calculado automaticamente a partir dos lançamentos feitos <b>na própria conta de investimento</b> — nada pra digitar de novo aqui. "Total aportado" conta só dinheiro novo (exclui rendimento reinvestido); "Rendimento acumulado" é esse rendimento reinvestido. Se algum rendimento foi recebido mas <b>não</b> reinvestido (virou dinheiro comum), ele não entra aqui, porque já deixou de ser patrimônio investido.</div></div>
+      ${contasInvestimento.length > 1 ? `
+      <div class="section-title" style="margin-top:20px;">Patrimônio por conta</div>
+      <div class="grid grid-3">${contasInvestimento.map(c => `<div class="card"><div class="stat-label">${c.nome}</div><div class="stat-value">${fmtMoeda(patrimonioAtualConta(c))}</div></div>`).join('')}</div>
+      <div class="logic-note"><span>ℹ️</span><div>Total aportado/rendimento/rentabilidade acima somam todas as contas juntas — separar por conta exigiria confiar numa marcação que hoje não é sempre consistente entre aporte novo e reaplicação de rendimento, então preferiu-se não arriscar mostrar um número que pode estar errado.</div></div>` : ''}`;
   },
 
   relatorioModo: 'mensal',
@@ -1941,10 +1937,11 @@ const Modals = {
         <div class="field"><label>Data</label><input id="ntData" type="date" value="${VIEW.ano}-${String(VIEW.mes).padStart(2,'0')}-01"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Categoria</label><select id="ntCategoria" onchange="Modals.refreshSubcategorias(); Modals.refreshCampoCartaoFatura('nt')">${catOpts}</select></div>
+        <div class="field"><label>Categoria</label><select id="ntCategoria" onchange="Modals.refreshSubcategorias(); Modals.refreshCampoCartaoFatura('nt'); Modals.refreshCampoContaInvestimento()">${catOpts}</select></div>
         <div class="field"><label>Subcategoria</label><select id="ntSubcategoria"></select></div>
       </div>
       <div class="field"><label>Conta ou cartão</label><select id="ntConta" onchange="Modals.refreshParcelas(); Modals.refreshFormaPagamento('nt')">${contaOpts}</select></div>
+      <div class="field" id="ntCampoContaInvestimento" style="display:none;"><label>Investir em qual conta?</label><select id="ntContaInvestimento"></select></div>
       <div class="field" id="ntCampoFormaPagamento" style="display:none;"><label>Forma de pagamento</label>
         <select id="ntFormaPagamento">
           <option value="Débito">Débito</option>
@@ -1962,7 +1959,21 @@ const Modals = {
     Modals.refreshParcelas();
     Modals.refreshFormaPagamento('nt');
     Modals.refreshCampoCartaoFatura('nt');
+    Modals.refreshCampoContaInvestimento();
     Modals.open('novaTransacao');
+  },
+  // Só aparece quando existe mais de 1 conta tipo Investimento — com uma só, não há ambiguidade
+  // (o app já sabe pra onde vai, como sempre foi). Com duas ou mais (ex.: CDB + Tesouro Direto em
+  // contas separadas), sem essa escolha o aporte sempre cairia na primeira conta encontrada,
+  // mesmo que você quisesse investir na outra — por isso ela pergunta explicitamente nesse caso.
+  refreshCampoContaInvestimento() {
+    const campo = document.getElementById('ntCampoContaInvestimento');
+    if (!campo) return;
+    const catId = Number(document.getElementById('ntCategoria').value);
+    const contasInvestimento = STATE.contas.filter(c => c.tipo === 'Investimento' && c.ativa !== false);
+    if (catId !== 5 || contasInvestimento.length < 2) { campo.style.display = 'none'; return; }
+    document.getElementById('ntContaInvestimento').innerHTML = contasInvestimento.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
+    campo.style.display = 'block';
   },
   setTipoTransacao(tipo) {
     document.getElementById('ntTipo').value = tipo;
@@ -2285,7 +2296,15 @@ const Actions = {
     // saída era criada por aqui; a de entrada tinha que ser lançada à parte e já ficou faltando 2
     // vezes na prática. Agora a perna de entrada é criada junto, automaticamente.
     if (!isCartao && tipo === 'Despesa' && categoriaId === 5) {
-      const contaInvestimento = STATE.contas.find(c => c.tipo === 'Investimento');
+      // Com 2+ contas de investimento, o campo "Investir em qual conta?" (visível só nesse caso)
+      // diz o destino certo; com 1 só, não tem ambiguidade e cai na de sempre — mesmo comportamento
+      // de antes preservado pro caso comum.
+      const campoDestino = document.getElementById('ntCampoContaInvestimento');
+      const destinoEscolhidoId = campoDestino && campoDestino.style.display !== 'none'
+        ? Number(document.getElementById('ntContaInvestimento').value) : null;
+      const contaInvestimento = destinoEscolhidoId
+        ? STATE.contas.find(c => c.id === destinoEscolhidoId)
+        : STATE.contas.find(c => c.tipo === 'Investimento');
       if (contaInvestimento && contaInvestimento.id !== carteiraId) {
         STATE.lancamentos.push({
           id: uuid(), data, tipo: 'Receita', categoriaId, subcategoriaId,
