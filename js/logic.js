@@ -349,10 +349,31 @@ const AppLogic = (function () {
     return { valor, totalInvestido: reais(centavos(totalInvestido)), despesaMedia: reais(centavos(despesaMedia)), meses };
   }
 
+  // ---- Regra 7: Ajustes de saldo (reconciliação) frequentes sem causa identificada ----
+  // Cada "Ajuste de saldo" é um lançamento categoria 8 usado quando uma auditoria não acha a origem
+  // exata de um desvio entre o app e o extrato real. Um ajuste isolado é normal (arredondamento, atraso
+  // de compensação bancária). Mas 2+ nos últimos 90 dias é sinal de que existe uma fonte de dinheiro —
+  // entrada ou saída — que o app não está capturando de forma sistemática, e reconciliar de novo só
+  // esconde o sintoma. Ignora ajustes pequenos (<R$20) pra não gerar ruído com arredondamento comum.
+  const JANELA_AJUSTES_DIAS = 90;
+  const AJUSTE_MINIMO_RELEVANTE = 20;
+  function medirAjustesSaldo(state, asOfISO) {
+    const limite = new Date(asOfISO);
+    limite.setDate(limite.getDate() - JANELA_AJUSTES_DIAS);
+    const limiteISO = limite.toISOString().slice(0, 10);
+    const itens = state.lancamentos
+      .filter(l => isAjusteSaldo(l) && l.data >= limiteISO && l.data <= asOfISO && l.valor >= AJUSTE_MINIMO_RELEVANTE)
+      .sort((a, b) => a.data.localeCompare(b.data));
+    return { valor: itens.length, itens };
+  }
+
   // Registro central das regras — usado tanto pra gerar os alertas de hoje quanto pra reavaliar (3
   // meses depois) uma decisão já tomada, chamando a MESMA função de medição com uma data diferente.
   // 'direcaoBoa' diz pra que lado o número precisa andar pra ser uma melhora.
   function definicaoRegra(alertaId, state) {
+    if (alertaId === 'ajustes_saldo_frequentes') {
+      return { direcaoBoa: 'menor', limiar: 1, medir: (s, d) => medirAjustesSaldo(s, d).valor };
+    }
     if (alertaId === 'juros_bancarios') {
       return { direcaoBoa: 'menor', limiar: 100, medir: (s, d) => medirJuros(s, d).valor };
     }
@@ -467,6 +488,19 @@ const AppLogic = (function () {
         evidencia: `Seu patrimônio investido (R$ ${reserva.totalInvestido.toFixed(2).replace('.', ',')}) cobre ${reserva.valor.toFixed(1).replace('.', ',')} meses da sua despesa média (R$ ${reserva.despesaMedia.toFixed(2).replace('.', ',')}/mês). O recomendado é ter entre 3 e 6 meses guardados.`,
         acoesSugeridas: ['Definir um aporte mensal fixo pra reserva', 'Pausar outros investimentos até formar a reserva mínima', 'Criar uma Meta de reserva de emergência'],
         valorAtual: reserva.valor, direcaoBoa: 'maior',
+      });
+    }
+
+    const ajustes = medirAjustesSaldo(state, hojeISO);
+    if (ajustes.valor >= 2) {
+      const ultimos = ajustes.itens.slice(-3).map(l => `${l.data} (R$ ${l.valor.toFixed(2).replace('.', ',')})`).join(', ');
+      alertas.push({
+        id: 'ajustes_saldo_frequentes', titulo: 'Ajustes de saldo sem causa identificada', icone: '🧩',
+        severidade: ajustes.valor >= 3 ? 'critico' : 'atencao',
+        indicador: ajustes.valor + ' nos últimos 90 dias',
+        evidencia: `${ajustes.valor} lançamentos de "Ajuste de saldo (reconciliação)" nos últimos 90 dias: ${ultimos}. Isolado pode ser arredondamento — o padrão sugere uma fonte de dinheiro que o app não está capturando.`,
+        acoesSugeridas: ['Puxar o extrato completo do banco (PDF) e conferir lançamento por lançamento, não só reconciliar', 'Checar se algum tipo de movimentação recorrente (tarifa, rendimento automático, transferência) nunca é lançada', 'Se persistir por 2-3 reconciliações seguidas, considerar automatizar esse tipo de lançamento'],
+        valorAtual: ajustes.valor, direcaoBoa: 'menor',
       });
     }
 
