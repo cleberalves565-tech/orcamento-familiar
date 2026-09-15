@@ -1,7 +1,7 @@
 // Controlador da interface — liga as telas aprovadas na Etapa 2 aos dados reais,
 // ao motor de regras (logic.js) e ao armazenamento criptografado (storage.js).
 
-const CATEGORIA_ICONS = { 1: '🏠', 2: '💸', 3: '🧾', 4: '📺', 5: '💰', 6: '🔁', 7: '💵', 8: '⚖️' };
+const CATEGORIA_ICONS = { 1: '🏠', 2: '💸', 3: '🧾', 4: '📺', 5: '💰', 6: '🔁', 7: '💵', 8: '⚖️', 9: '🎯' };
 const MESES_NOMES = ['', 'Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 function fmtMoeda(v) {
@@ -1208,18 +1208,32 @@ const Render = {
 
   render_metas() {
     const el = document.getElementById('screen-metas');
+    // Valor guardado nunca é digitado — é sempre Despesas − Receitas da subcategoria própria da
+    // meta (mesma lógica do "Total aportado" em Investimentos). "Despesa" aqui = dinheiro saindo de
+    // uma conta comum pra dentro da meta (guardar); "Receita" = tirar da meta de volta (usar/desistir).
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    function valorGuardado(subcategoriaId) {
+      let cents = 0;
+      STATE.lancamentos.forEach(l => {
+        if (l.subcategoriaId !== subcategoriaId || l.data > hojeISO) return;
+        if (l.tipo === 'Despesa') cents += AppLogic.centavos(l.valor);
+        else if (l.tipo === 'Receita') cents -= AppLogic.centavos(l.valor);
+      });
+      return AppLogic.reais(cents);
+    }
     el.innerHTML = `
       <div class="topbar"><h1>Metas financeiras</h1><button class="btn" onclick="Modals.openNovaMeta()">+ Nova meta</button></div>
+      <div class="logic-note"><span>ℹ️</span><div><b>Como registrar um aporte:</b> crie a meta abaixo — isso cria sozinho uma subcategoria dedicada em <b>🎯Metas</b>. Pra guardar dinheiro nela, lance uma transação normal: Despesa → categoria 🎯Metas → a subcategoria com o nome da meta → a conta de onde o dinheiro realmente saiu. Exemplo: guardou R$300 pra "Viagem em família" saindo da Conta Corrente → Nova transação → Despesa, R$300, categoria 🎯Metas, subcategoria "Viagem em família", conta Conta Corrente. O card já mostra R$300 guardados, sem editar nada aqui. Pra usar o dinheiro (tirar da meta), lance uma Receita na mesma subcategoria.</div></div>
       <div class="grid grid-3">${STATE.metas.map(m => {
-        const pct = m.valorAlvo > 0 ? Math.round((m.valorAtual / m.valorAlvo) * 100) : 0;
+        const valorAtual = valorGuardado(m.subcategoriaId);
+        const pct = m.valorAlvo > 0 ? Math.round((valorAtual / m.valorAlvo) * 100) : 0;
         return `<div class="card"><div style="font-size:26px; margin-bottom:8px;">${m.icone}</div>
-          <div class="row-title">${m.nome}</div>
+          <div class="row-title">${m.nome}${pct>=100?' ✅':''}</div>
           <div class="progress"><div class="progress-fill" style="width:${Math.min(pct,100)}%; background:${pct>=100?'var(--green)':'var(--accent)'}"></div></div>
-          <div class="stat-sub" style="margin-top:6px;">${fmtMoeda(m.valorAtual)} de ${fmtMoeda(m.valorAlvo)}${m.prazo ? ' · ' + m.prazo : ''}</div>
+          <div class="stat-sub" style="margin-top:6px;">${fmtMoeda(valorAtual)} de ${fmtMoeda(m.valorAlvo)} (${pct}%)${m.prazo ? ' · ' + m.prazo : ''}</div>
         </div>`;
       }).join('') || '<div class="card stat-sub">Nenhuma meta cadastrada ainda.</div>'}
-      </div>
-      <div class="logic-note"><span>ℹ️</span><div>Uma meta é marcada como concluída automaticamente quando o valor guardado atinge o valor-alvo.</div></div>`;
+      </div>`;
   },
 
   render_investimentos() {
@@ -1831,11 +1845,9 @@ const Modals = {
       <div class="modal-head"><h3>Nova meta</h3><button class="close-x" onclick="Modals.close('novaMeta')">✕</button></div>
       <div class="field"><label>Nome da meta</label><input id="nmNome" placeholder="Ex: Viagem em família"></div>
       <div class="field"><label>Ícone</label><select id="nmIcone"><option>✈️</option><option>🛡️</option><option>🚗</option><option>🏠</option><option>💻</option><option>🎓</option></select></div>
-      <div class="field-row">
-        <div class="field"><label>Valor alvo (R$)</label><input id="nmAlvo" type="number" step="0.01"></div>
-        <div class="field"><label>Valor já guardado (R$)</label><input id="nmAtual" type="number" step="0.01" value="0"></div>
-      </div>
+      <div class="field"><label>Valor alvo (R$)</label><input id="nmAlvo" type="number" step="0.01"></div>
       <div class="field"><label>Prazo estimado</label><input id="nmPrazo" placeholder="Ex: dez/2026"></div>
+      <div class="logic-note"><span>ℹ️</span><div>Não existe campo de "valor já guardado" — ao criar, esta meta ganha sua própria subcategoria em 🎯Metas. O valor guardado é calculado sozinho a partir dos lançamentos que você fizer nela (veja o exemplo na tela de Metas).</div></div>
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarMeta()">Criar meta</button>`;
     Modals.open('novaMeta');
   },
@@ -2113,9 +2125,22 @@ const Actions = {
   async salvarMeta() {
     const nome = document.getElementById('nmNome').value.trim();
     if (!nome) return;
+    // Garante que a categoria 🎯Metas existe (defensivo — hoje ela já vem no seu histórico, mas se
+    // algum dia a sincronização recomeçar do zero em outro dispositivo isso não pode travar a criação
+    // da meta).
+    if (!STATE.categorias.find(c => c.id === AppLogic.CATEGORIA_METAS)) {
+      STATE.categorias.push({ id: AppLogic.CATEGORIA_METAS, nome: '🎯Metas', ativa: true });
+    }
+    // Cada meta tem sua própria subcategoria dentro de 🎯Metas — é nela que o usuário vai lançar os
+    // aportes (Despesa) e resgates (Receita) pela tela normal de Nova transação. Assim o "valor
+    // guardado" nunca precisa ser digitado à mão: render_metas() soma os lançamentos dessa
+    // subcategoria sozinho (ver comentário lá).
+    const maxSubId = Math.max(0, ...STATE.subcategorias.map(s => s.id));
+    const subcategoriaId = maxSubId + 1;
+    STATE.subcategorias.push({ id: subcategoriaId, categoriaId: AppLogic.CATEGORIA_METAS, nome, ativa: true });
     STATE.metas.push({ id: uuid(), nome, icone: document.getElementById('nmIcone').value,
       valorAlvo: parseFloat(document.getElementById('nmAlvo').value) || 0,
-      valorAtual: parseFloat(document.getElementById('nmAtual').value) || 0,
+      subcategoriaId,
       prazo: document.getElementById('nmPrazo').value });
     await persist(); Modals.close('novaMeta'); Nav.show('metas');
   },

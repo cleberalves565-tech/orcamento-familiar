@@ -62,6 +62,15 @@ const AppLogic = (function () {
     return lancamento.categoriaId === CATEGORIA_AJUSTE_SALDO;
   }
 
+  // Categoria criada para automatizar Metas (antes era um cadastro 100% manual, nunca usado — 0
+  // registros mesmo depois de meses de uso do app). Cada meta ganha sua própria subcategoria aqui;
+  // "aportar" pra uma meta é lançar uma Despesa nesta subcategoria saindo da conta que o dinheiro
+  // realmente saiu (normal, comum, mesma tela de sempre) — e "resgatar" é lançar uma Receita na mesma
+  // subcategoria. O valor guardado da meta é sempre Despesas − Receitas dessa subcategoria, nunca
+  // digitado à mão, pra não desalinhar do histórico real. Como Investimento, é dinheiro sendo
+  // reservado, não gasto novo — por isso também é transferência interna, fora do fluxo de caixa.
+  const CATEGORIA_METAS = 9;
+
   function isTransferenciaInterna(lancamento) {
     if (isTransferenciaFatura(lancamento)) return true;
     if (isAjusteSaldo(lancamento)) return true;
@@ -73,6 +82,7 @@ const AppLogic = (function () {
     // dinheiro mudando de lugar (conta comum ⇄ carteira de investimento), nunca ganho ou gasto novo —
     // por isso a checagem agora é pela categoria toda, não mais por subcategoria específica.
     if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE) return true;
+    if (lancamento.categoriaId === CATEGORIA_METAS) return true;
     if (lancamento.categoriaId === CATEGORIA_GANHOS && lancamento.subcategoriaId === SUBCATEGORIA_SALDO_INICIAL) return true;
     return false;
   }
@@ -175,6 +185,6 @@ const AppLogic = (function () {
   return {
     centavos, reais, gerarParcelas, isTransferenciaFatura, isTransferenciaInterna, isAjusteSaldo,
     calcularFaturaCartao, calcularSaldoConta, calcularOrcadoRealizado, detectarEstouros,
-    CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO,
+    CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO, CATEGORIA_METAS,
   };
 })();
