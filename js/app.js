@@ -2308,7 +2308,7 @@ const Actions = {
       if (contaInvestimento && contaInvestimento.id !== carteiraId) {
         STATE.lancamentos.push({
           id: uuid(), data, tipo: 'Receita', categoriaId, subcategoriaId,
-          descricao: descricao + ' (entrada na conta Investimento)', valor,
+          descricao: descricao + ' (entrada na conta ' + contaInvestimento.nome + ')', valor,
           formaPagamento: 'Transferência', carteiraId: contaInvestimento.id,
           qtdParcelas: 1, parcelaAtual: 1, cartaoFaturaId: null,
         });
