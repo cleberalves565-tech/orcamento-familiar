@@ -982,14 +982,29 @@ const Render = {
     const saldoInvView = saldoInvestidoAteData(cortarEm);
     const rotuloPeriodo = mesEhFuturo ? 'hoje (mês ainda não chegou)' : mesEhAtual ? 'hoje' : 'em ' + MESES_NOMES[mes] + '/' + ano;
     const ultimos = STATE.lancamentos.slice().sort((a, b) => b.data.localeCompare(a.data)).slice(0, 6);
+    const itensMesPainel = itensDoMes(ano, mes);
     const porCategoria = {};
-    itensDoMes(ano, mes).filter(i => i.tipo === 'Despesa' && !i.transferencia).forEach(i => {
+    itensMesPainel.filter(i => i.tipo === 'Despesa' && !i.transferencia).forEach(i => {
       porCategoria[i.categoriaId] = (porCategoria[i.categoriaId] || 0) + AppLogic.centavos(i.valor);
     });
     const catRows = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]).map(([cid, cents]) => {
       const pct = despesas > 0 ? Math.round((cents / AppLogic.centavos(despesas)) * 100) : 0;
-      return `<div class="legend-item">${CATEGORIA_ICONS[cid] || ''} ${categoriaNome(Number(cid))} — ${pct}%</div>`;
+      // Sem CATEGORIA_ICONS aqui: o nome da categoria (categoriaNome) já vem com o emoji embutido
+      // (ex.: "🧾Despesas Temporárias") — prefixar de novo duplicava o ícone na frente do texto.
+      return `<div class="legend-item">${categoriaNome(Number(cid))} — ${pct}%</div>`;
     }).join('');
+    // Investimento não é despesa (é transferência pra um ativo seu seguindo isTransferenciaInterna),
+    // por isso fica de fora do total de despesas e da lista acima — mesmo raciocínio já usado em
+    // totalDespesasMes. Mas pra dar visão de quanto do dinheiro movimentado no mês virou patrimônio em
+    // vez de virar gasto, mostra à parte, como % do total de despesas (não como fatia do mesmo bolo —
+    // por isso as % de cima continuam somando ~100% sozinhas, sem essa linha).
+    const contaInvestimentoPainel = STATE.contas.find(c => c.tipo === 'Investimento');
+    const investimentoContaIdPainel = contaInvestimentoPainel ? contaInvestimentoPainel.id : null;
+    const aportesMesCents = itensMesPainel
+      .filter(i => i.tipo === 'Despesa' && i.categoriaId === 5 && i.subcategoriaId !== 747 && i.carteiraId !== investimentoContaIdPainel)
+      .reduce((s, i) => s + AppLogic.centavos(i.valor), 0);
+    const aportesMes = AppLogic.reais(aportesMesCents);
+    const investimentoPct = despesas > 0 ? Math.round((aportesMesCents / AppLogic.centavos(despesas)) * 100) : 0;
 
     el.innerHTML = `
       <div class="topbar"><h1>Painel geral</h1>${mesNavHtml()}</div>
@@ -1002,7 +1017,12 @@ const Render = {
       </div>
       <div class="logic-note"><span>ℹ️</span><div>Compras no cartão de crédito entram aqui pelo mês em que a <b>parcela vence</b> (não pelo mês da compra) — assim o valor se aproxima do que realmente compromete sua conta em cada mês. Pagamentos de fatura em si não entram nas despesas, para não contar a mesma compra duas vezes.</div></div>
       <div class="section-title">Gastos por categoria (${MESES_NOMES[mes]})</div>
-      <div class="card"><div class="legend">${catRows || '<div class="stat-sub">Sem despesas neste mês.</div>'}</div></div>
+      <div class="card">
+        <div class="legend">${catRows || '<div class="stat-sub">Sem despesas neste mês.</div>'}</div>
+        ${aportesMesCents > 0 ? `<div class="legend-item" style="border-top:1px solid var(--border); margin-top:10px; padding-top:10px;">💹 Investimento — ${investimentoPct}% do total gasto
+          <span class="stat-sub" style="display:block; margin-top:2px;">${fmtMoeda(aportesMes)} aportados este mês — não é despesa, por isso não soma com as fatias acima</span>
+        </div>` : ''}
+      </div>
       <div class="section-title">Últimos lançamentos</div>
       <div class="card">${ultimos.map(l => `
         <div class="row" style="cursor:pointer;" onclick="Modals.openEditarTransacao('${l.id}')"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}</div><div class="row-sub">${fmtData(l.data)} · ${categoriaNome(l.categoriaId)}</div></div></div>
@@ -1157,7 +1177,7 @@ const Render = {
         const subsAtivas = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
         const subsInativas = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa === false);
         return `<div class="card" style="margin-bottom:10px;">
-          <div class="row-title" style="margin-bottom:10px;">${CATEGORIA_ICONS[cat.id] || ''} ${cat.nome}</div>
+          <div class="row-title" style="margin-bottom:10px;">${cat.nome}</div>
           <div style="display:flex; flex-wrap:wrap; gap:8px;">
             ${subsAtivas.map(s => `<span class="chip">${s.nome} <span style="opacity:.5; cursor:pointer; margin-left:2px;" title="Desativar" onclick="event.stopPropagation(); Actions.toggleSubcategoriaAtiva(${s.id})">×</span></span>`).join('')}
             <span class="chip" style="border-style:dashed;" onclick="Modals.openNovaSubcategoria(${cat.id})">+ nova subcategoria</span>
@@ -1225,7 +1245,7 @@ const Render = {
           const catId = Number(cid);
           return `<div class="row" style="cursor:pointer;" onclick="Modals.toggleOrc(${catId})">
             <div style="flex:1;">
-              <div class="row-title">${CATEGORIA_ICONS[catId] || ''} ${categoriaNome(catId)} <span id="arrow-${catId}" style="color:var(--text3); font-size:11px;">▸ ver subcategorias</span></div>
+              <div class="row-title">${categoriaNome(catId)} <span id="arrow-${catId}" style="color:var(--text3); font-size:11px;">▸ ver subcategorias</span></div>
               <div class="progress"><div class="progress-fill" style="width:${Math.min(pct,100)}%; background:${cor}"></div></div>
               <div class="stat-sub" style="margin-top:5px;">Realizado ${fmtMoeda(agg.realizado/100)} de ${fmtMoeda(agg.orcado/100)} orçado (${pct}%)${sufixo}</div>
             </div></div>
@@ -1900,7 +1920,7 @@ const Modals = {
   },
 
   openNovaTransacao() {
-    const catOpts = STATE.categorias.map(c => `<option value="${c.id}">${CATEGORIA_ICONS[c.id]||''} ${c.nome}</option>`).join('');
+    const catOpts = STATE.categorias.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
     // "Digital"/"Físico" (PIX Central, Dinheiro) ficam de fora do seletor de conta — nenhuma das duas é
     // um lugar onde o dinheiro mora, são só a forma como ele sai da conta de verdade (ex.: Conta
     // Corrente). Contas desativadas (ver Modals.contaSelecionavel) também somem daqui — mesma regra
@@ -2068,7 +2088,7 @@ const Modals = {
         const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
         if (!subs.length) return '';
         return `<div style="margin-bottom:6px;">
-          <div class="row-title" style="cursor:pointer; padding:8px 0; border-top:1px solid var(--border);" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'block' : 'none';">${CATEGORIA_ICONS[cat.id] || ''} ${cat.nome} <span style="color:var(--text3); font-size:11px;">▸ ${subs.length} subcategoria(s)</span></div>
+          <div class="row-title" style="cursor:pointer; padding:8px 0; border-top:1px solid var(--border);" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'block' : 'none';">${cat.nome} <span style="color:var(--text3); font-size:11px;">▸ ${subs.length} subcategoria(s)</span></div>
           <div style="display:none; padding-left:4px;">
             ${subs.map(s => `<div class="field-row" style="align-items:center; margin-bottom:6px;">
               <label style="flex:1.4; font-size:12.5px; color:var(--text2);">${s.nome}</label>
@@ -2127,7 +2147,7 @@ const Modals = {
     const l = STATE.lancamentos.find(x => x.id === id);
     if (!l) return;
     const descEsc = String(l.descricao).replace(/"/g, '&quot;');
-    const catOpts = STATE.categorias.map(c => `<option value="${c.id}" ${c.id === l.categoriaId ? 'selected' : ''}>${CATEGORIA_ICONS[c.id] || ''} ${c.nome}</option>`).join('');
+    const catOpts = STATE.categorias.map(c => `<option value="${c.id}" ${c.id === l.categoriaId ? 'selected' : ''}>${c.nome}</option>`).join('');
     const isCartaoAtual = l.formaPagamento === 'Cartão de Crédito';
     // Se este lançamento antigo ainda estiver numa conta que não é mais selecionável (PIX Central,
     // Dinheiro, ou qualquer conta desativada), ela continua na lista só pra não sumir a seleção atual —
