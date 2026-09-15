@@ -604,6 +604,17 @@ const Nav = {
     document.getElementById('mainArea').scrollTop = 0;
     Render.screen(id);
     Auth.resetInactivity();
+    // No celular a sidebar vira um menu-gaveta (drawer) — depois de escolher uma tela, o usuário já
+    // deixou claro pra onde quer ir, então fecha o menu sozinho em vez de exigir um segundo toque.
+    this.closeMobileMenu();
+  },
+  toggleMobileMenu() {
+    document.querySelector('.sidebar').classList.toggle('open');
+    document.getElementById('navScrim').classList.toggle('show');
+  },
+  closeMobileMenu() {
+    document.querySelector('.sidebar').classList.remove('open');
+    document.getElementById('navScrim').classList.remove('show');
   },
 };
 
@@ -1106,15 +1117,22 @@ const Render = {
     const el = document.getElementById('screen-categorias');
     el.innerHTML = `
       <div class="topbar"><h1>Categorias e subcategorias</h1></div>
-      <div class="logic-note"><span>ℹ️</span><div>As categorias abaixo vêm da sua planilha e não podem ser excluídas (só desativadas), para preservar seu histórico.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>As categorias abaixo vêm da sua planilha e não podem ser excluídas — só desativadas. Passe o mouse num nome ativo pra ver o "×" de desativar; subcategorias desativadas ficam escondidas das listas de lançamento, mas continuam aqui pra você reativar se precisar.</div></div>
       ${STATE.categorias.map(cat => {
-        const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id);
+        const subsAtivas = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
+        const subsInativas = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa === false);
         return `<div class="card" style="margin-bottom:10px;">
           <div class="row-title" style="margin-bottom:10px;">${CATEGORIA_ICONS[cat.id] || ''} ${cat.nome}</div>
           <div style="display:flex; flex-wrap:wrap; gap:8px;">
-            ${subs.map(s => `<span class="chip">${s.nome}</span>`).join('')}
+            ${subsAtivas.map(s => `<span class="chip">${s.nome} <span style="opacity:.5; cursor:pointer; margin-left:2px;" title="Desativar" onclick="event.stopPropagation(); Actions.toggleSubcategoriaAtiva(${s.id})">×</span></span>`).join('')}
             <span class="chip" style="border-style:dashed;" onclick="Modals.openNovaSubcategoria(${cat.id})">+ nova subcategoria</span>
           </div>
+          ${subsInativas.length ? `<div style="margin-top:10px;">
+            <span style="font-size:12px; color:var(--text3); cursor:pointer; text-decoration:underline;" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'flex' : 'none';">${subsInativas.length} desativada${subsInativas.length>1?'s':''} — mostrar</span>
+            <div style="display:none; flex-wrap:wrap; gap:8px; margin-top:6px;">
+              ${subsInativas.map(s => `<span class="chip" style="opacity:.5; text-decoration:line-through;">${s.nome} <span style="text-decoration:none; opacity:1; cursor:pointer; margin-left:2px;" title="Reativar" onclick="event.stopPropagation(); Actions.toggleSubcategoriaAtiva(${s.id})">↺</span></span>`).join('')}
+            </div>
+          </div>` : ''}
         </div>`;
       }).join('')}`;
   },
@@ -1747,7 +1765,9 @@ const Modals = {
   },
   refreshSubcategorias() {
     const catId = Number(document.getElementById('ntCategoria').value);
-    const subs = STATE.subcategorias.filter(s => s.categoriaId === catId);
+    // Subcategoria desativada (ex.: duplicata mesclada) não pode aparecer aqui — senão ela continua
+    // sendo escolhida em lançamentos novos, o que anula o propósito de tê-la desativado.
+    const subs = STATE.subcategorias.filter(s => s.categoriaId === catId && s.ativa !== false);
     document.getElementById('ntSubcategoria').innerHTML = subs.map(s => `<option value="${s.id}">${s.nome}</option>`).join('');
   },
   refreshCampoCartaoFatura(prefixo) {
@@ -1914,7 +1934,7 @@ const Modals = {
         <button class="btn danger" onclick="Actions.excluirTransacao('${l.id}')">Excluir</button>
       </div>`;
     Modals.setTipoEdicao(l.tipo);
-    Modals.refreshSubcategoriasEdicao();
+    Modals.refreshSubcategoriasEdicao(l.subcategoriaId);
     document.getElementById('etSubcategoria').value = l.subcategoriaId;
     document.getElementById('etParcelas').value = String(l.qtdParcelas || 1);
     Modals.refreshParcelasEdicao();
@@ -1929,10 +1949,14 @@ const Modals = {
     document.getElementById('etTabReceita').style.background = tipo === 'Receita' ? 'var(--success-bg-soft)' : '';
     document.getElementById('etTabReceita').style.color = tipo === 'Receita' ? 'var(--green)' : '';
   },
-  refreshSubcategoriasEdicao() {
+  // manterInativaId: se o lançamento sendo editado já está numa subcategoria desativada (histórico
+  // antigo), ela precisa continuar aparecendo aqui — senão o <select> fica sem opção selecionada e a
+  // edição corrompe silenciosamente o lançamento pra outra subcategoria. Ao trocar de categoria no
+  // formulário (onchange), a chamada vem sem argumento e as desativadas somem normalmente.
+  refreshSubcategoriasEdicao(manterInativaId) {
     const catId = Number(document.getElementById('etCategoria').value);
-    const subs = STATE.subcategorias.filter(s => s.categoriaId === catId);
-    document.getElementById('etSubcategoria').innerHTML = subs.map(s => `<option value="${s.id}">${s.nome}</option>`).join('');
+    const subs = STATE.subcategorias.filter(s => s.categoriaId === catId && (s.ativa !== false || s.id === manterInativaId));
+    document.getElementById('etSubcategoria').innerHTML = subs.map(s => `<option value="${s.id}">${s.nome}${s.ativa===false?' (inativa)':''}</option>`).join('');
   },
   refreshParcelasEdicao() {
     const val = document.getElementById('etConta').value;
@@ -2110,6 +2134,17 @@ const Actions = {
     const maxId = Math.max(0, ...STATE.subcategorias.map(s => s.id));
     STATE.subcategorias.push({ id: maxId + 1, categoriaId, nome, ativa: true });
     await persist(); Modals.close('novaSubcategoria'); Nav.show('categorias');
+  },
+  async toggleSubcategoriaAtiva(id) {
+    const s = STATE.subcategorias.find(s => s.id === id);
+    if (!s) return;
+    const vaiDesativar = s.ativa !== false;
+    if (vaiDesativar) {
+      const qtd = STATE.lancamentos.filter(l => l.subcategoriaId === id).length;
+      if (!confirm(`Desativar "${s.nome}"? Ela some das listas de novo lançamento, mas os ${qtd} lançamento(s) já feitos com ela continuam intactos e no histórico.`)) return;
+    }
+    s.ativa = !vaiDesativar;
+    await persist(); Nav.show('categorias');
   },
 
   mudarMes(delta) {
