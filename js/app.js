@@ -1167,7 +1167,7 @@ const Render = {
     const statusReceitaGeral = pctReceitaGeral >= 100 ? 'ok' : 'atencao';
 
     el.innerHTML = `
-      <div class="topbar"><h1>Orçamentos</h1>${mesNavHtml()}</div>
+      <div class="topbar"><h1>Orçamentos</h1><div style="display:flex; align-items:center; gap:10px;">${mesNavHtml()}<button class="btn" onclick="Modals.openEditarOrcamento()">✏️ Editar orçamento</button></div></div>
       ${estourados.length ? `<div class="banner warn"><span>⚠️</span><div><b>${estourados.length} subcategoria(s) estouraram o orçamento este mês:</b> ${estourados.map(e => subcategoriaNome(e.subcategoriaId) + ' (' + (e.orcado > 0 ? e.pct + '%' : 'sem orçamento') + ')').join(', ')}. Veja o relatório completo em Relatórios.</div></div>` : ''}
       ${(totalOrcadoDespesa > 0 || totalOrcadoReceita > 0) ? `<div class="grid grid-2">
         ${totalOrcadoDespesa > 0 ? `<div class="card">
@@ -1863,6 +1863,49 @@ const Modals = {
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarAtivo()">Adicionar</button>`;
     Modals.open('novoAtivo');
   },
+  // Categorias que não fazem sentido num orçamento planejado: Pagamento de Fatura (é a mesma compra
+  // já contada na parcela, entraria em dobro) e Ajuste de Saldo (correção pontual de reconciliação,
+  // não um gasto/ganho recorrente pra planejar mês a mês). As duas já são excluídas da tela de
+  // Orçamentos (ver calcularOrcadoRealizado) — aqui é só espelhar a mesma regra na edição.
+  CATEGORIAS_FORA_DO_ORCAMENTO: [6, 8],
+  openEditarOrcamento() {
+    const { ano, mes } = VIEW;
+    const categoriasOrcaveis = STATE.categorias.filter(c => !Modals.CATEGORIAS_FORA_DO_ORCAMENTO.includes(c.id));
+    function valorAtual(categoriaId, subcategoriaId) {
+      const o = STATE.orcamentos.find(o => o.ano === ano && o.mes === mes && o.categoriaId === categoriaId && o.subcategoriaId === subcategoriaId);
+      return o ? o.valorOrcado : '';
+    }
+    document.getElementById('modalEditarOrcamentoBody').innerHTML = `
+      <div class="modal-head"><h3>Editar orçamento — ${MESES_NOMES[mes]}/${ano}</h3><button class="close-x" onclick="Modals.close('editarOrcamento')">✕</button></div>
+      <div class="logic-note" style="margin-bottom:12px;"><span>ℹ️</span><div>Deixe um campo em branco (ou zero) pra este mês ficar sem orçamento definido naquela subcategoria — é diferente de "orçar R$0", que aparece como estourado em qualquer gasto real.</div></div>
+      <button class="btn ghost sm" style="margin-bottom:14px;" onclick="Modals.copiarOrcamentoMesAnterior()">📋 Copiar valores do mês anterior</button>
+      ${categoriasOrcaveis.map(cat => {
+        const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
+        if (!subs.length) return '';
+        return `<div style="margin-bottom:6px;">
+          <div class="row-title" style="cursor:pointer; padding:8px 0; border-top:1px solid var(--border);" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'block' : 'none';">${CATEGORIA_ICONS[cat.id] || ''} ${cat.nome} <span style="color:var(--text3); font-size:11px;">▸ ${subs.length} subcategoria(s)</span></div>
+          <div style="display:none; padding-left:4px;">
+            ${subs.map(s => `<div class="field-row" style="align-items:center; margin-bottom:6px;">
+              <label style="flex:1.4; font-size:12.5px; color:var(--text2);">${s.nome}</label>
+              <input type="number" step="0.01" placeholder="0,00" style="flex:1;" id="orc_${cat.id}_${s.id}" value="${valorAtual(cat.id, s.id)}">
+            </div>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+      <button class="btn" style="width:100%; margin-top:12px;" onclick="Actions.salvarOrcamentoMes()">Salvar orçamento de ${MESES_NOMES[mes]}/${ano}</button>`;
+    Modals.open('editarOrcamento');
+  },
+  copiarOrcamentoMesAnterior() {
+    if (!confirm('Isso substitui os valores já digitados neste formulário pelos valores do mês anterior (você ainda precisa clicar em Salvar pra confirmar). Continuar?')) return;
+    let { ano, mes } = VIEW;
+    mes -= 1; if (mes < 1) { mes = 12; ano -= 1; }
+    let preenchidos = 0;
+    STATE.orcamentos.filter(o => o.ano === ano && o.mes === mes).forEach(o => {
+      const input = document.getElementById(`orc_${o.categoriaId}_${o.subcategoriaId}`);
+      if (input) { input.value = o.valorOrcado; input.closest('div[style*="padding-left"]').style.display = 'block'; preenchidos++; }
+    });
+    if (!preenchidos) alert(`Não encontrei orçamento salvo em ${MESES_NOMES[mes]}/${ano} pra copiar.`);
+  },
   openNovaSubcategoria(categoriaId) {
     document.getElementById('modalNovaSubcategoriaBody').innerHTML = `
       <div class="modal-head"><h3>Nova subcategoria</h3><button class="close-x" onclick="Modals.close('novaSubcategoria')">✕</button></div>
@@ -2159,6 +2202,30 @@ const Actions = {
     const maxId = Math.max(0, ...STATE.subcategorias.map(s => s.id));
     STATE.subcategorias.push({ id: maxId + 1, categoriaId, nome, ativa: true });
     await persist(); Modals.close('novaSubcategoria'); Nav.show('categorias');
+  },
+  async salvarOrcamentoMes() {
+    const { ano, mes } = VIEW;
+    const categoriasOrcaveis = STATE.categorias.filter(c => !Modals.CATEGORIAS_FORA_DO_ORCAMENTO.includes(c.id));
+    categoriasOrcaveis.forEach(cat => {
+      const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
+      const tipo = cat.id === AppLogic.CATEGORIA_GANHOS ? 'Receita' : 'Despesa';
+      subs.forEach(s => {
+        const input = document.getElementById(`orc_${cat.id}_${s.id}`);
+        if (!input) return;
+        const valor = parseFloat(input.value) || 0;
+        const existente = STATE.orcamentos.find(o => o.ano === ano && o.mes === mes && o.categoriaId === cat.id && o.subcategoriaId === s.id);
+        if (valor > 0) {
+          if (existente) existente.valorOrcado = valor;
+          else STATE.orcamentos.push({ ano, mes, categoriaId: cat.id, subcategoriaId: s.id, valorOrcado: valor, tipo });
+        } else if (existente) {
+          // Campo deixado em branco/zero num mês que já tinha orçamento — remove a linha, em vez de
+          // gravar valorOrcado:0, pra não virar um falso "estourado" em qualquer gasto real (ver nota
+          // no modal e em calcularOrcadoRealizado).
+          STATE.orcamentos.splice(STATE.orcamentos.indexOf(existente), 1);
+        }
+      });
+    });
+    await persist(); Modals.close('editarOrcamento'); Nav.show('orcamentos');
   },
   async toggleSubcategoriaAtiva(id) {
     const s = STATE.subcategorias.find(s => s.id === id);

@@ -185,6 +185,6 @@ const AppLogic = (function () {
   return {
     centavos, reais, gerarParcelas, isTransferenciaFatura, isTransferenciaInterna, isAjusteSaldo,
     calcularFaturaCartao, calcularSaldoConta, calcularOrcadoRealizado, detectarEstouros,
-    CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO, CATEGORIA_METAS,
+    CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO, CATEGORIA_METAS, CATEGORIA_GANHOS,
   };
 })();
