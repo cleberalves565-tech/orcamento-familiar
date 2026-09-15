@@ -4,12 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MinhaFamília — Orçamento &amp; Finanças</title>
-<link rel="stylesheet" href="css/style.css?v=20260904b">
+<link rel="stylesheet" href="css/style.css?v=20260915a">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
 </head>
 <body>
 <div class="app" id="app" style="display:none;">
+
+<div class="mobile-topbar" id="mobileTopbar">
+  <button class="hamburger-btn" onclick="Nav.toggleMobileMenu()" aria-label="Abrir menu">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
+  <div class="brand-name" style="font-size:14px;">MinhaFamília</div>
+</div>
+<div class="nav-scrim" id="navScrim" onclick="Nav.closeMobileMenu()"></div>
 
 <div class="sidebar">
   <div class="brand">
@@ -18,6 +26,7 @@
       <div class="brand-name">MinhaFamília</div>
       <div class="brand-sub">Orçamento &amp; Finanças</div>
     </div>
+    <button class="sidebar-close-btn" onclick="Nav.closeMobileMenu()" aria-label="Fechar menu">✕</button>
   </div>
 
   <button class="nav-item active" data-screen="dashboard" onclick="Nav.show('dashboard')">
@@ -110,6 +119,6 @@
 <script src="js/logic.js?v=20260915a"></script>
 <script src="js/storage.js"></script>
 <script src="js/sync.js"></script>
-<script src="js/app.js?v=20260912g"></script>
+<script src="js/app.js?v=20260915b"></script>
 </body>
 </html>
