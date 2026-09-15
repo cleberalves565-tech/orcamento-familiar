@@ -1740,8 +1740,8 @@ const Modals = {
     const catOpts = STATE.categorias.map(c => `<option value="${c.id}">${CATEGORIA_ICONS[c.id]||''} ${c.nome}</option>`).join('');
     // "Digital"/"Físico" (PIX Central, Dinheiro) ficam de fora do seletor de conta — nenhuma das duas é
     // um lugar onde o dinheiro mora, são só a forma como ele sai da conta de verdade (ex.: Conta
-    // Corrente). Contas desativadas (Modals.CONTA_ATIVA) também somem daqui — mesma regra de Categorias.
-    // Ver Modals.refreshFormaPagamento.
+    // Corrente). Contas desativadas (ver Modals.contaSelecionavel) também somem daqui — mesma regra
+    // de Categorias. Ver Modals.refreshFormaPagamento.
     const contaOpts = STATE.cartoes.map(c => `<option value="cartao_${c.id}">${c.nome}</option>`)
       .concat(STATE.contas.filter(Modals.contaSelecionavel).map(c => `<option value="conta_${c.id}">${c.nome}</option>`)).join('');
     const cartaoFaturaOpts = STATE.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
