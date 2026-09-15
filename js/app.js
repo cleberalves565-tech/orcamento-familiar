@@ -1709,6 +1709,73 @@ const Render = {
     this.fillGoogleSyncCard();
   },
 
+  render_manual() {
+    const el = document.getElementById('screen-manual');
+    const secoes = [
+      { icone: '📊', titulo: 'Painel geral', aberta: true, corpo: `
+        <p>A primeira tela que você vê ao entrar. Resume a saúde financeira do mês atual:</p>
+        <ul style="margin:6px 0 10px 18px; padding:0;">
+          <li><b>Saldo disponível</b> — dinheiro líquido nas contas correntes e em espécie, hoje.</li>
+          <li><b>Patrimônio investido</b> — quanto está aplicado (CDB etc). Fica separado do saldo disponível porque não é dinheiro pronto pra gastar sem resgatar antes.</li>
+          <li><b>Receitas do mês</b> e <b>Despesas do mês</b> — tudo já lançado no mês, considerando compras no cartão pelo mês em que a <b>parcela vence</b> (não o mês da compra).</li>
+          <li><b>Economia do mês</b> — % da receita que sobrou depois das despesas.</li>
+        </ul>
+        <p style="margin:0;">Use as setas ← → no topo da tela pra navegar entre meses anteriores e futuros.</p>` },
+      { icone: '↕️', titulo: 'Transações', aberta: false, corpo: `
+        <p>Onde você lança cada despesa ou receita do dia a dia. Toque em <b>+ Nova transação</b> e preencha:</p>
+        <ul style="margin:6px 0 10px 18px; padding:0;">
+          <li><b>Tipo</b> — Despesa ou Receita.</li>
+          <li><b>Categoria / Subcategoria</b> — pra organizar e comparar depois com o orçamento.</li>
+          <li><b>Conta ou cartão</b> — de onde o dinheiro sai (ou entra).</li>
+          <li><b>Parcelas</b> — se for compra no cartão, dá pra parcelar em até 18x.</li>
+        </ul>
+        <p style="margin:0;">Toque em qualquer lançamento da lista pra editar ou excluir.</p>` },
+      { icone: '🏦', titulo: 'Contas', aberta: false, corpo: `
+        <p>Cadastro das contas de verdade (Conta Corrente, Investimento etc). Pix e Dinheiro não aparecem aqui como conta — são <b>formas de pagamento</b> escolhidas na hora de lançar a transação, dentro de uma conta bancária.</p>
+        <p style="margin:8px 0 0;">Contas do tipo <b>Investimento</b> têm um campo extra — "🛟 Conta pra reserva de emergência" — marque "sim" só se o dinheiro tem liquidez real (resgate rápido, sem risco de perder valor). Isso controla o que entra na conta da reserva de emergência em Alertas.</p>` },
+      { icone: '💳', titulo: 'Cartões de crédito', aberta: false, corpo: `
+        <p>Cadastro dos cartões e acompanhamento de fatura. Uma compra parcelada entra nos relatórios pelo mês em que <b>cada parcela vence</b>, não no mês da compra — assim o valor mostrado sempre reflete o que realmente compromete sua conta naquele mês.</p>
+        <p style="margin:8px 0 0;">O pagamento da fatura em si não conta como despesa nova (senão a mesma compra seria contada duas vezes).</p>` },
+      { icone: '🗂️', titulo: 'Categorias', aberta: false, corpo: `
+        <p>Estrutura em dois níveis: <b>categoria</b> (grupo grande, ex: Gastos Fixos) e <b>subcategoria</b> (o detalhe, ex: Aluguel). Toda transação é lançada numa subcategoria.</p>
+        <p style="margin:8px 0 0;">Dá pra criar novas subcategorias dentro de uma categoria existente, ou desativar as que não usa mais (elas somem das telas de lançamento, mas o histórico continua intacto).</p>` },
+      { icone: '📈', titulo: 'Orçamentos', aberta: false, corpo: `
+        <p>Onde você define quanto pretende gastar por subcategoria em cada mês (o "orçado"). O app compara automaticamente com o "realizado" (o que foi de fato lançado) em várias telas — Orçamentos, Painel geral e Relatórios.</p>` },
+      { icone: '⚠️', titulo: 'Alertas Financeiros', aberta: false, corpo: `
+        <p>O app monitora sozinho 6 sinais de alerta — juros bancários, meses no vermelho, gasto sem categoria específica, assinaturas fora do padrão, subcategorias estourando o orçamento repetidamente, e reserva de emergência baixa.</p>
+        <p style="margin:8px 0 0;">Cada alerta só olha <b>meses já fechados</b> (o mês em andamento nunca conta, pra não piscar por causa de um mês pela metade). Quando você registra uma decisão (ex: "vou renegociar a dívida"), o app guarda o número de hoje e reavalia sozinho <b>3 meses depois</b>: se melhorou, vai pro histórico como concluído; se não, dá pra tentar outra ação sem perder o que já foi feito.</p>` },
+      { icone: '🎯', titulo: 'Metas', aberta: false, corpo: `
+        <p>Criar uma meta gera sozinha uma subcategoria dedicada dentro de 🎯Metas. Pra guardar dinheiro, lance uma <b>Despesa</b> normal nessa subcategoria (saindo de uma conta comum); pra usar o dinheiro guardado, lance uma <b>Receita</b> na mesma subcategoria. O card da meta atualiza sozinho, sem editar nada manualmente.</p>` },
+      { icone: '💹', titulo: 'Investimentos', aberta: false, corpo: `
+        <p>Resume o que está investido: total aportado (dinheiro novo que você colocou) e rendimento acumulado, calculados automaticamente a partir dos lançamentos na conta Investimento.</p>
+        <p style="margin:8px 0 0;"><b>Importante:</b> o rendimento do mês (ex: juros do CDB) precisa ser lançado como <b>Receita</b> antes de reinvestir — só assim ele entra como ganho no Painel geral. Se você só lançar a reaplicação (uma transferência pra dentro do investimento), o app não sabe separar "isso é rendimento novo" de "isso é dinheiro que já era seu".</p>` },
+      { icone: '📊', titulo: 'Relatórios', aberta: false, corpo: `
+        <p>Gráficos pra enxergar tendências: orçado x realizado por categoria, evolução do compromisso de cartão mês a mês, e uma projeção (rolling forecast) de como cada orçamento deve fechar com base no ritmo atual de gasto.</p>` },
+      { icone: '🤖', titulo: 'Chat IA', aberta: false, corpo: `
+        <p>Um assistente pra tirar dúvidas sobre seus próprios dados financeiros dentro do app, em linguagem natural. Precisa estar configurado (ver indicador ON/OFF na barra lateral) pra funcionar.</p>` },
+      { icone: '⚙️', titulo: 'Configurações', aberta: false, corpo: `
+        <p>Bloqueio automático por PIN, aparência (tema claro/escuro), backup e restauração, e as opções de sincronização entre aparelhos (login com Google, rede local Wi-Fi, ou GitHub). O login com Google é o mais simples: atualiza em tempo real nos dois aparelhos, sem precisar copiar nenhum código.</p>` },
+    ];
+
+    function itemHtml(s) {
+      return `<div class="card" style="margin-bottom:10px; padding:0; overflow:hidden;">
+        <div class="row-title" style="padding:14px 16px; margin:0; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:10px;" onclick="const b=this.nextElementSibling; b.style.display = b.style.display==='none' ? 'block' : 'none'; this.querySelector('.mnl-caret').textContent = b.style.display==='none' ? '▸' : '▾';">
+          <span>${s.icone} ${s.titulo}</span><span class="mnl-caret" style="color:var(--text3); flex-shrink:0;">${s.aberta ? '▾' : '▸'}</span>
+        </div>
+        <div style="display:${s.aberta ? 'block' : 'none'}; padding:0 16px 16px; color:var(--text2); font-size:13px; line-height:1.55;">${s.corpo}</div>
+      </div>`;
+    }
+
+    el.innerHTML = `
+      <div class="topbar"><h1>Manual de uso</h1></div>
+      <div class="logic-note"><span>ℹ️</span><div>Guia rápido de cada tela do app. Toque no título de uma seção abaixo pra abrir ou fechar.</div></div>
+      ${secoes.map(itemHtml).join('')}
+      <div class="card" style="margin-top:4px;">
+        <div class="row-title">Resumindo a ideia do app</div>
+        <div class="stat-sub" style="margin-top:6px; line-height:1.55; font-size:12.5px;">O app olha pra três frentes ao mesmo tempo: <b>o que já aconteceu</b> (Transações, Relatórios), <b>pra onde o dinheiro está indo</b> (Orçamentos, Painel geral) e <b>o que fazer quando algo sai do previsto</b> (Alertas, Metas). A ideia é sair do "não sei pra onde foi o dinheiro" pra decisões registradas e acompanhadas ao longo do tempo.</div>
+      </div>`;
+  },
+
   async fillLanSyncCard() {
     const body = document.getElementById('lanSyncConfigBody');
     if (!body) return;
