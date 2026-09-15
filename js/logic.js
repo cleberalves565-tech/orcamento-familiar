@@ -65,8 +65,14 @@ const AppLogic = (function () {
   function isTransferenciaInterna(lancamento) {
     if (isTransferenciaFatura(lancamento)) return true;
     if (isAjusteSaldo(lancamento)) return true;
-    if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE &&
-        (lancamento.subcategoriaId === SUBCATEGORIA_RENDA_FIXA || lancamento.subcategoriaId === SUBCATEGORIA_REAPLICACAO_RENDIMENTO)) return true;
+    // Antes só Renda Fixa (713) e Reaplicação de rendimento (747) eram tratadas como transferência —
+    // as outras subcategorias da categoria Investimento (DinDin, Renda Variável, Bolsa, Consórcio)
+    // ficavam de fora e contavam como receita/despesa real. Isso só não tinha aparecido ainda porque
+    // nenhuma delas tinha lançamento — assim que o usuário registrou uma compra de Tesouro (Renda
+    // Variável), ela entrou inflando "Receitas do mês" à toa. Categoria Investimento inteira é sempre
+    // dinheiro mudando de lugar (conta comum ⇄ carteira de investimento), nunca ganho ou gasto novo —
+    // por isso a checagem agora é pela categoria toda, não mais por subcategoria específica.
+    if (lancamento.categoriaId === CATEGORIA_INVESTIMENTO_APORTE) return true;
     if (lancamento.categoriaId === CATEGORIA_GANHOS && lancamento.subcategoriaId === SUBCATEGORIA_SALDO_INICIAL) return true;
     return false;
   }
