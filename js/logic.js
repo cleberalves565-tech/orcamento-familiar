@@ -323,15 +323,26 @@ const AppLogic = (function () {
     return [...chaves].map(c => c.split('_').map(Number));
   }
 
-  // ---- Regra 6: reserva de emergência (patrimônio investido ÷ despesa média mensal) ----
+  // ---- Regra 6: reserva de emergência (saldo líquido investido ÷ despesa média mensal) ----
+  // Fonte do "investido": a conta tipo "Investimento" (mesmo saldo do card "Patrimônio investido" no
+  // Painel geral) — NÃO a tabela manual STATE.investimentos ("Seus ativos"). Motivo: reserva de
+  // emergência exige liquidez real (resgate rápido, sem risco de perda de capital); um ativo manual
+  // como Tesouro RendA+ 2035 (vencimento longo, resgate antecipado com marcação a mercado) não cumpre
+  // isso e não deveria contar. Checado com o usuário: TODA a movimentação da conta Investimento (saldo
+  // inicial + aportes/resgates/rendimento) é CDB — genuinamente líquida — enquanto o RendA+ 2035 nunca
+  // passou por essa conta, só existe na tabela manual. Por isso a conta já é o pool certo, sem precisar
+  // de um sinalizador de liquidez por ativo.
   function medirReserva(state, asOfISO) {
     const meses = mesesFechados(asOfISO, 6);
-    const totalInvestido = (state.investimentos || []).reduce((s, i) => s + (i.valorAtual != null ? i.valorAtual : (i.valor || 0)), 0);
+    const contaInv = (state.contas || []).find(c => c.tipo === 'Investimento');
+    const lancsAte = state.lancamentos.filter(l => l.data <= asOfISO);
+    const totalInvestidoCents = contaInv ? centavos(calcularSaldoConta(contaInv.id, lancsAte)) + centavos(contaInv.saldoInicial || 0) : 0;
+    const totalInvestido = reais(totalInvestidoCents);
     const despesaMedia = meses.reduce((s, ym) => s + despesaRealizadaNoMes(state, ym), 0) / (meses.length || 1);
     // Aqui o número que importa é a RAZÃO investido/despesa (ex.: 0,35 meses), não um valor em reais —
     // reais() faz round-trip por centavos (÷100) pra arredondar dinheiro, então usá-la aqui dividiria
     // a razão por 100 sem necessidade. Arredonda a própria razão a 2 casas direto (Math.round ×100 ÷100).
-    const razao = despesaMedia > 0 ? centavos(totalInvestido) / centavos(despesaMedia) : 0;
+    const razao = despesaMedia > 0 ? totalInvestidoCents / centavos(despesaMedia) : 0;
     const valor = Math.round(razao * 100) / 100;
     return { valor, totalInvestido: reais(centavos(totalInvestido)), despesaMedia: reais(centavos(despesaMedia)), meses };
   }
