@@ -328,7 +328,11 @@ const AppLogic = (function () {
     const meses = mesesFechados(asOfISO, 6);
     const totalInvestido = (state.investimentos || []).reduce((s, i) => s + (i.valorAtual != null ? i.valorAtual : (i.valor || 0)), 0);
     const despesaMedia = meses.reduce((s, ym) => s + despesaRealizadaNoMes(state, ym), 0) / (meses.length || 1);
-    const valor = despesaMedia > 0 ? reais(centavos(totalInvestido) / centavos(despesaMedia) * 100) / 100 : 0;
+    // Aqui o número que importa é a RAZÃO investido/despesa (ex.: 0,35 meses), não um valor em reais —
+    // reais() faz round-trip por centavos (÷100) pra arredondar dinheiro, então usá-la aqui dividiria
+    // a razão por 100 sem necessidade. Arredonda a própria razão a 2 casas direto (Math.round ×100 ÷100).
+    const razao = despesaMedia > 0 ? centavos(totalInvestido) / centavos(despesaMedia) : 0;
+    const valor = Math.round(razao * 100) / 100;
     return { valor, totalInvestido: reais(centavos(totalInvestido)), despesaMedia: reais(centavos(despesaMedia)), meses };
   }
 
