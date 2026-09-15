@@ -182,9 +182,285 @@ const AppLogic = (function () {
     return linhasOrcamento.filter(l => l.status === 'estourado');
   }
 
+  // ===================== Alertas Financeiros =====================
+  // Painel de indicadores de alerta + ação de contenção, pedido pelo usuário depois de uma conversa
+  // sobre saúde financeira. Cada regra "mede" um sintoma real (juros, meses no vermelho, gasto não
+  // categorizado, assinatura com cobrança fora do padrão, subcategoria estourando o orçamento vários
+  // meses seguidos, reserva de emergência baixa) e diz se ela está "disparando" hoje.
+  //
+  // Decisão de design: toda janela de tempo usa só MESES FECHADOS (o mês corrente, em andamento, nunca
+  // entra na conta) — um mês pela metade quase sempre parece "vermelho" ou "sem estouro" por acaso,
+  // dependendo do dia em que você olha, o que geraria alerta piscando. Isso vale tanto pra decidir se
+  // o alerta dispara HOJE quanto pra reavaliar 3 meses depois de uma decisão tomada.
+  const ALERTA_JUROS_SUBCATEGORIA = 703; // 🏦Juros bancários
+  const ALERTA_ASSINATURA_CATEGORIA = 4; // 📺Assinatura
+
+  function ymAdd(ym, delta) {
+    let [y, m] = ym.split('-').map(Number);
+    m += delta;
+    while (m > 12) { m -= 12; y++; }
+    while (m < 1) { m += 12; y--; }
+    return y + '-' + String(m).padStart(2, '0');
+  }
+
+  // Últimos N meses TERMINADOS antes do mês de asOfISO (não inclui o mês de asOfISO).
+  function mesesFechados(asOfISO, n) {
+    const ymAtual = asOfISO.slice(0, 7);
+    const arr = [];
+    for (let i = n; i >= 1; i--) arr.push(ymAdd(ymAtual, -i));
+    return arr;
+  }
+
+  function medianaLista(arr) {
+    const s = [...arr].sort((a, b) => a - b);
+    const n = s.length;
+    if (!n) return 0;
+    return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+  }
+
+  function despesaRealizadaNoMes(state, ym) {
+    const [ano, mes] = ym.split('-').map(Number);
+    let total = 0;
+    state.lancamentos.forEach(l => {
+      if (l.data.slice(0, 7) !== ym || l.tipo !== 'Despesa') return;
+      if (isTransferenciaInterna(l) || isAjusteSaldo(l)) return;
+      if (l.formaPagamento === 'Cartão de Crédito') return; // entra via parcela, não duplicar
+      total += l.valor;
+    });
+    (state.parcelas || []).forEach(p => {
+      if (p.ano === ano && p.mes === mes && p.categoriaId !== CATEGORIA_PAGAMENTO_FATURA) total += p.valor;
+    });
+    return total;
+  }
+
+  // ---- Regra 1: juros bancários nos últimos 3 meses fechados ----
+  function medirJuros(state, asOfISO) {
+    const meses = mesesFechados(asOfISO, 3);
+    const total = state.lancamentos
+      .filter(l => l.subcategoriaId === ALERTA_JUROS_SUBCATEGORIA && meses.includes(l.data.slice(0, 7)))
+      .reduce((s, l) => s + l.valor, 0);
+    return { valor: reais(centavos(total)), meses };
+  }
+
+  // ---- Regra 2: meses no vermelho nos últimos 6 meses fechados ----
+  function medirMesesVermelho(state, asOfISO) {
+    const meses = mesesFechados(asOfISO, 6);
+    let receitaPorMes = {};
+    state.lancamentos.forEach(l => {
+      if (isTransferenciaInterna(l) || isAjusteSaldo(l) || l.tipo !== 'Receita') return;
+      const ym = l.data.slice(0, 7);
+      if (!meses.includes(ym)) return;
+      receitaPorMes[ym] = (receitaPorMes[ym] || 0) + l.valor;
+    });
+    let qtdVermelho = 0;
+    const detalhe = meses.map(ym => {
+      const receita = receitaPorMes[ym] || 0;
+      const despesa = despesaRealizadaNoMes(state, ym);
+      const saldo = reais(centavos(receita) - centavos(despesa));
+      if (saldo < 0) qtdVermelho++;
+      return { ym, saldo };
+    });
+    return { valor: qtdVermelho, meses, detalhe };
+  }
+
+  // ---- Regra 3: subcategoria "Outros" com volume relevante nos últimos 6 meses fechados ----
+  const CATEGORIAS_NAO_GASTO = [CATEGORIA_INVESTIMENTO_APORTE, CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_GANHOS, CATEGORIA_AJUSTE_SALDO, CATEGORIA_METAS];
+  function subcategoriasOutros(state) {
+    return state.subcategorias.filter(s => s.ativa !== false && /outros/i.test(s.nome) && !CATEGORIAS_NAO_GASTO.includes(s.categoriaId));
+  }
+  function medirOutros(state, asOfISO, subcategoriaId) {
+    const meses = mesesFechados(asOfISO, 6);
+    const total = state.lancamentos
+      .filter(l => l.subcategoriaId === subcategoriaId && l.tipo === 'Despesa' && meses.includes(l.data.slice(0, 7)))
+      .reduce((s, l) => s + l.valor, 0);
+    return { valor: reais(centavos(total)), meses };
+  }
+
+  // ---- Regra 4: lançamento de assinatura com valor fora do padrão da própria subcategoria, dentro
+  // dos últimos 3 meses fechados. "Padrão" = mediana dos OUTROS lançamentos daquela subcategoria
+  // (leave-one-out), pra não precisar de histórico longo nem se confundir com reajuste gradual de preço.
+  function medirAssinatura(state, asOfISO, subcategoriaId) {
+    const meses = mesesFechados(asOfISO, 3);
+    const todos = state.lancamentos.filter(l => l.subcategoriaId === subcategoriaId).sort((a, b) => a.data.localeCompare(b.data));
+    let piorValor = 0, piorLancamento = null;
+    todos.forEach((l, i) => {
+      if (!meses.includes(l.data.slice(0, 7))) return;
+      const outros = todos.filter((_, j) => j !== i).map(x => x.valor);
+      const med = medianaLista(outros);
+      if (med > 0 && l.valor > med * 1.6 && (l.valor - med) > 20 && l.valor > piorValor) {
+        piorValor = l.valor; piorLancamento = { data: l.data, valor: l.valor, valorTipico: reais(centavos(med)) };
+      }
+    });
+    return { valor: piorLancamento ? piorLancamento.valor : 0, lancamento: piorLancamento, meses };
+  }
+
+  // ---- Regra 5: subcategoria estourando o orçamento (real, com valorOrcado>0) 3+ meses fechados seguidos ----
+  function medirEstouro(state, asOfISO, categoriaId, subcategoriaId) {
+    const meses = mesesFechados(asOfISO, 6);
+    const pontos = meses.map(ym => {
+      const [ano, mes] = ym.split('-').map(Number);
+      const linhas = calcularOrcadoRealizado(state.lancamentos, state.orcamentos, ano, mes, state.parcelas);
+      const linha = linhas.find(l => l.categoriaId === categoriaId && l.subcategoriaId === subcategoriaId && l.tipo === 'Despesa' && l.orcado > 0);
+      return linha ? { ym, estourado: linha.status === 'estourado', pct: linha.pct } : { ym, estourado: false, pct: null, semOrcamento: true };
+    });
+    let streak = 0;
+    for (let i = pontos.length - 1; i >= 0; i--) {
+      if (pontos[i].estourado) streak++; else break;
+    }
+    const ultimoPct = pontos.length ? (pontos[pontos.length - 1].pct || 0) : 0;
+    return { valor: streak, pctAtual: ultimoPct, meses, pontos };
+  }
+
+  // Varre todas as combinações categoria/subcategoria ATIVAS com orçamento definido em algum mês dos
+  // últimos 6 fechados, pra descobrir candidatas à Regra 5 sem precisar de lista fixa.
+  function candidatasEstouro(state, asOfISO) {
+    const meses = mesesFechados(asOfISO, 6);
+    const chaves = new Set();
+    state.orcamentos.forEach(o => {
+      const ym = o.ano + '-' + String(o.mes).padStart(2, '0');
+      if (meses.includes(ym) && o.tipo === 'Despesa' && o.valorOrcado > 0) chaves.add(o.categoriaId + '_' + o.subcategoriaId);
+    });
+    return [...chaves].map(c => c.split('_').map(Number));
+  }
+
+  // ---- Regra 6: reserva de emergência (patrimônio investido ÷ despesa média mensal) ----
+  function medirReserva(state, asOfISO) {
+    const meses = mesesFechados(asOfISO, 6);
+    const totalInvestido = (state.investimentos || []).reduce((s, i) => s + (i.valorAtual != null ? i.valorAtual : (i.valor || 0)), 0);
+    const despesaMedia = meses.reduce((s, ym) => s + despesaRealizadaNoMes(state, ym), 0) / (meses.length || 1);
+    const valor = despesaMedia > 0 ? reais(centavos(totalInvestido) / centavos(despesaMedia) * 100) / 100 : 0;
+    return { valor, totalInvestido: reais(centavos(totalInvestido)), despesaMedia: reais(centavos(despesaMedia)), meses };
+  }
+
+  // Registro central das regras — usado tanto pra gerar os alertas de hoje quanto pra reavaliar (3
+  // meses depois) uma decisão já tomada, chamando a MESMA função de medição com uma data diferente.
+  // 'direcaoBoa' diz pra que lado o número precisa andar pra ser uma melhora.
+  function definicaoRegra(alertaId, state) {
+    if (alertaId === 'juros_bancarios') {
+      return { direcaoBoa: 'menor', limiar: 100, medir: (s, d) => medirJuros(s, d).valor };
+    }
+    if (alertaId === 'meses_vermelho') {
+      return { direcaoBoa: 'menor', limiar: 3, medir: (s, d) => medirMesesVermelho(s, d).valor };
+    }
+    if (alertaId === 'reserva_emergencia') {
+      return { direcaoBoa: 'maior', limiar: 3, medir: (s, d) => medirReserva(s, d).valor };
+    }
+    if (alertaId.startsWith('outros_')) {
+      const subId = Number(alertaId.split('_')[1]);
+      return { direcaoBoa: 'menor', limiar: 1500, medir: (s, d) => medirOutros(s, d, subId).valor };
+    }
+    if (alertaId.startsWith('assinatura_')) {
+      const subId = Number(alertaId.split('_')[1]);
+      return { direcaoBoa: 'menor', limiar: 0, medir: (s, d) => medirAssinatura(s, d, subId).valor };
+    }
+    if (alertaId.startsWith('estouro_')) {
+      const [, catId, subId] = alertaId.split('_').map((v, i) => i === 0 ? v : Number(v));
+      return { direcaoBoa: 'menor', limiar: 3, medir: (s, d) => medirEstouro(s, d, catId, subId).valor };
+    }
+    return null;
+  }
+
+  // Reavalia, numa data qualquer (ex.: 3 meses depois da decisão), se um alerta ainda dispara e qual o
+  // valor medido — usado pelo app.js quando chega a data de avaliação de uma rodada de decisão.
+  function medirAlertaPorId(alertaId, state, asOfISO) {
+    const def = definicaoRegra(alertaId, state);
+    if (!def) return null;
+    const valor = def.medir(state, asOfISO);
+    const dispara = def.direcaoBoa === 'menor' ? valor > def.limiar : valor < def.limiar;
+    return { valor, dispara, direcaoBoa: def.direcaoBoa };
+  }
+
+  function calcularAlertas(state, hojeISO) {
+    const alertas = [];
+
+    const juros = medirJuros(state, hojeISO);
+    if (juros.valor > 100) {
+      alertas.push({
+        id: 'juros_bancarios', titulo: 'Juros bancários nos últimos 3 meses', icone: '🏦',
+        severidade: juros.valor > 300 ? 'critico' : 'atencao',
+        indicador: 'R$ ' + juros.valor.toFixed(2).replace('.', ','),
+        evidencia: `Você pagou R$ ${juros.valor.toFixed(2).replace('.', ',')} em juros bancários entre ${juros.meses[0]} e ${juros.meses[2]}.`,
+        acoesSugeridas: ['Renegociar a dívida/rotativo com o banco', 'Conferir se alguma fatura está vencendo em atraso', 'Avaliar portabilidade da dívida para uma taxa menor'],
+        valorAtual: juros.valor, direcaoBoa: 'menor',
+      });
+    }
+
+    const vermelho = medirMesesVermelho(state, hojeISO);
+    if (vermelho.valor >= 3) {
+      alertas.push({
+        id: 'meses_vermelho', titulo: 'Meses no vermelho', icone: '📉',
+        severidade: vermelho.valor >= 4 ? 'critico' : 'atencao',
+        indicador: vermelho.valor + ' de 6 meses',
+        evidencia: `${vermelho.valor} dos últimos 6 meses fechados (${vermelho.meses[0]} a ${vermelho.meses[5]}) fecharam com despesa maior que receita.`,
+        acoesSugeridas: ['Revisar os gastos variáveis do mês', 'Criar uma reserva de curto prazo pra meses de pico de gasto', 'Rever o orçamento das categorias que mais estouram'],
+        valorAtual: vermelho.valor, direcaoBoa: 'menor',
+      });
+    }
+
+    subcategoriasOutros(state).forEach(sub => {
+      const m = medirOutros(state, hojeISO, sub.id);
+      if (m.valor > 1500) {
+        alertas.push({
+          id: 'outros_' + sub.id, titulo: `Gasto não categorizado em "${sub.nome}"`, icone: '❓',
+          severidade: m.valor > 4000 ? 'critico' : 'atencao',
+          indicador: 'R$ ' + m.valor.toFixed(2).replace('.', ','),
+          evidencia: `R$ ${m.valor.toFixed(2).replace('.', ',')} lançados em "${sub.nome}" nos últimos 6 meses fechados — um valor alto pra ficar sem categoria específica.`,
+          acoesSugeridas: ['Revisar os lançamentos de "Outros" e criar subcategorias específicas', 'Recategorizar retroativamente os maiores valores'],
+          valorAtual: m.valor, direcaoBoa: 'menor',
+        });
+      }
+    });
+
+    state.subcategorias.filter(s => s.ativa !== false && s.categoriaId === ALERTA_ASSINATURA_CATEGORIA).forEach(sub => {
+      const m = medirAssinatura(state, hojeISO, sub.id);
+      if (m.lancamento) {
+        alertas.push({
+          id: 'assinatura_' + sub.id, titulo: `Cobrança fora do padrão em "${sub.nome}"`, icone: '📺',
+          severidade: 'atencao',
+          indicador: 'R$ ' + m.lancamento.valor.toFixed(2).replace('.', ','),
+          evidencia: `Em ${m.lancamento.data}, "${sub.nome}" cobrou R$ ${m.lancamento.valor.toFixed(2).replace('.', ',')} — bem acima do valor típico de R$ ${m.lancamento.valorTipico.toFixed(2).replace('.', ',')}.`,
+          acoesSugeridas: ['Confirmar se a cobrança está correta', 'Cancelar ou fazer downgrade do plano', 'Contestar a cobrança com a operadora/banco'],
+          valorAtual: m.valor, direcaoBoa: 'menor',
+        });
+      }
+    });
+
+    candidatasEstouro(state, hojeISO).forEach(([catId, subId]) => {
+      const m = medirEstouro(state, hojeISO, catId, subId);
+      if (m.valor >= 3) {
+        const cat = state.categorias.find(c => c.id === catId);
+        const sub = state.subcategorias.find(s => s.id === subId);
+        alertas.push({
+          id: 'estouro_' + catId + '_' + subId, titulo: `"${sub ? sub.nome : subId}" estourando o orçamento`, icone: '🔥',
+          severidade: m.valor >= 5 ? 'critico' : 'atencao',
+          indicador: m.valor + ' meses seguidos',
+          evidencia: `"${cat ? cat.nome : catId} > ${sub ? sub.nome : subId}" estourou o orçamento nos últimos ${m.valor} meses fechados seguidos (${m.pctAtual}% do orçado no último mês).`,
+          acoesSugeridas: ['Reduzir o consumo nessa subcategoria', 'Ajustar o orçamento pra um valor mais realista', 'Entender se é um gasto pontual que vai parar sozinho'],
+          valorAtual: m.valor, direcaoBoa: 'menor',
+        });
+      }
+    });
+
+    const reserva = medirReserva(state, hojeISO);
+    if (reserva.valor < 3) {
+      alertas.push({
+        id: 'reserva_emergencia', titulo: 'Reserva de emergência baixa', icone: '🛟',
+        severidade: reserva.valor < 1 ? 'critico' : 'atencao',
+        indicador: reserva.valor.toFixed(1).replace('.', ',') + ' meses',
+        evidencia: `Seu patrimônio investido (R$ ${reserva.totalInvestido.toFixed(2).replace('.', ',')}) cobre ${reserva.valor.toFixed(1).replace('.', ',')} meses da sua despesa média (R$ ${reserva.despesaMedia.toFixed(2).replace('.', ',')}/mês). O recomendado é ter entre 3 e 6 meses guardados.`,
+        acoesSugeridas: ['Definir um aporte mensal fixo pra reserva', 'Pausar outros investimentos até formar a reserva mínima', 'Criar uma Meta de reserva de emergência'],
+        valorAtual: reserva.valor, direcaoBoa: 'maior',
+      });
+    }
+
+    const ordem = { critico: 0, atencao: 1 };
+    return alertas.sort((a, b) => ordem[a.severidade] - ordem[b.severidade]);
+  }
+
   return {
     centavos, reais, gerarParcelas, isTransferenciaFatura, isTransferenciaInterna, isAjusteSaldo,
     calcularFaturaCartao, calcularSaldoConta, calcularOrcadoRealizado, detectarEstouros,
+    calcularAlertas, medirAlertaPorId,
     CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO, CATEGORIA_METAS, CATEGORIA_GANHOS,
   };
 })();

@@ -91,7 +91,7 @@ function buildInitialStateFromSeed() {
     lancamentos: SEED.lancamentos.slice(),
     parcelas,
     orcamentos: SEED.orcamentos.slice(),
-    metas: [], investimentos: [],
+    metas: [], investimentos: [], alertasDecisoes: [],
     config: { chatIA: false, bloqueioMin: 5, modoAgregado: true, tema: 'escuro' },
   };
 }
@@ -99,7 +99,7 @@ function buildInitialStateFromSeed() {
 function buildEmptyState() {
   return {
     contas: [], cartoes: [], categorias: SEED.categorias, subcategorias: SEED.subcategorias,
-    lancamentos: [], parcelas: [], orcamentos: [], metas: [], investimentos: [],
+    lancamentos: [], parcelas: [], orcamentos: [], metas: [], investimentos: [], alertasDecisoes: [],
     config: { chatIA: false, bloqueioMin: 5, modoAgregado: true, tema: 'escuro' },
   };
 }
@@ -596,6 +596,9 @@ const Nav = {
   atual: 'dashboard',
   show(id) {
     this.atual = id;
+    // Contas antigas (sincronizadas antes da tela de Alertas existir) não têm esse campo no vault —
+    // sem isso, render_alertas quebraria na primeira visita. Mesmo padrão defensivo usado em Metas.
+    if (STATE && !STATE.alertasDecisoes) STATE.alertasDecisoes = [];
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById('screen-' + id).classList.add('active');
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -634,6 +637,24 @@ function contaOuCartaoNome(id) {
 }
 function lancamentosDoMes(ano, mes) {
   return STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m === mes; });
+}
+
+// ---------------- Alertas Financeiros — helpers de exibição ----------------
+function somarMeses(dataISO, n) {
+  const [y, m, d] = dataISO.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1 + n, d));
+  return dt.toISOString().slice(0, 10);
+}
+// Cada regra de alerta mede uma coisa diferente (R$, contagem de meses, meses fracionados de
+// reserva) — formata o número da forma certa pra cada uma, tanto na "foto de hoje" quanto no
+// antes/depois de uma rodada de decisão já registrada.
+function formatarValorAlerta(alertaId, valor) {
+  if (valor == null) return '—';
+  if (alertaId === 'juros_bancarios' || alertaId.startsWith('outros_') || alertaId.startsWith('assinatura_')) return fmtMoeda(valor);
+  if (alertaId === 'meses_vermelho') return valor + ' de 6 meses';
+  if (alertaId === 'reserva_emergencia') return valor.toFixed(1).replace('.', ',') + ' meses de reserva';
+  if (alertaId.startsWith('estouro_')) return valor + ' meses seguidos estourado';
+  return String(valor);
 }
 
 // ---------------- "Itens" — a mesma despesa vista pelo regime de caixa/competência de parcela ----------------
@@ -1212,6 +1233,75 @@ const Render = {
         }).join('') || '<div class="stat-sub">Nenhum orçamento definido para este mês.</div>'}
       </div>
       <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem. Em categorias de receita (Ganhos), passar de 100% é positivo — por isso aparece em verde. Subcategorias com gasto/ganho real mas sem orçamento definido para o mês aparecem com orçado R$ 0 (100% fora do previsto), para bater sempre com o Painel geral.</div></div>`;
+  },
+
+  render_alertas() {
+    const el = document.getElementById('screen-alertas');
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    STATE.alertasDecisoes = STATE.alertasDecisoes || [];
+    // Reavalia, na hora de abrir a tela, qualquer rodada cuja data de avaliação (decisão + 3 meses) já
+    // chegou. Isso muda STATE (mesmo padrão "otimista" do resto do app) — persiste em segundo plano,
+    // sem travar a pintura da tela.
+    if (Actions.avaliarRodadasVencidasSync()) persist();
+
+    const alertasHoje = AppLogic.calcularAlertas(STATE, hojeISO);
+    const idsComDecisaoAtiva = new Set(STATE.alertasDecisoes.filter(ad => ad.status === 'ativo').map(ad => ad.alertaId));
+    const semDecisao = alertasHoje.filter(a => !idsComDecisaoAtiva.has(a.id));
+    const comDecisao = STATE.alertasDecisoes.filter(ad => ad.status === 'ativo');
+    const historico = STATE.alertasDecisoes.filter(ad => ad.status === 'concluido');
+
+    function rodadaHtml(r, alertaId) {
+      const statusTxt = !r.avaliado
+        ? `🕒 Avaliação automática prevista em ${fmtData(r.dataAvaliacao)}`
+        : r.resultado === 'positivo' ? `✅ Resultado positivo` : `⏳ Sem efeito ainda`;
+      return `<div style="border-left:2px solid var(--border); padding:6px 0 6px 12px; margin-bottom:6px;">
+        <div class="row-sub" style="margin-bottom:2px;">${fmtData(r.dataDecisao)} — <b>${r.acao}</b></div>
+        <div class="stat-sub">Antes: ${formatarValorAlerta(alertaId, r.metricaAntes)}${r.avaliado ? ' → Depois: ' + formatarValorAlerta(alertaId, r.metricaDepois) : ''}</div>
+        <div class="stat-sub">${statusTxt}</div>
+      </div>`;
+    }
+
+    function cardSemDecisao(a) {
+      const cor = a.severidade === 'critico' ? 'var(--red)' : 'var(--amber)';
+      return `<div class="card" style="margin-bottom:10px; border-left:3px solid ${cor};">
+        <div class="row-title">${a.icone} ${a.titulo} <span style="font-size:11px; font-weight:600; color:${cor};">${a.severidade === 'critico' ? 'CRÍTICO' : 'ATENÇÃO'}</span></div>
+        <div class="stat-sub" style="margin:6px 0 10px;">${a.evidencia}</div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+          ${a.acoesSugeridas.map(ac => `<span class="chip" style="cursor:pointer;" onclick="document.getElementById('decisaoTexto_${a.id}').value = '${ac.replace(/'/g, "\\'")}'">${ac}</span>`).join('')}
+        </div>
+        <div class="field"><textarea id="decisaoTexto_${a.id}" rows="2" placeholder="Qual ação você vai tomar? (ex: renegociar, cancelar, ajustar orçamento...)"></textarea></div>
+        <button class="btn" onclick="Actions.registrarDecisaoAlerta('${a.id}')">Registrar decisão</button>
+      </div>`;
+    }
+
+    function cardComDecisao(ad) {
+      const ultima = ad.rodadas[ad.rodadas.length - 1];
+      const podeNovaTentativa = ultima && ultima.avaliado && ultima.resultado === 'sem_efeito';
+      return `<div class="card" style="margin-bottom:10px;">
+        <div class="row-title">${ad.icone || '⚠️'} ${ad.titulo}</div>
+        ${ad.rodadas.map(r => rodadaHtml(r, ad.alertaId)).join('')}
+        ${podeNovaTentativa ? `
+          <div class="banner warn" style="margin:8px 0;"><span>⏳</span><div>A última ação ainda não deu resultado. Quer tentar outra abordagem? Fica registrado na mesma linha do tempo, sem perder o que já foi feito.</div></div>
+          <div class="field"><textarea id="decisaoTexto_${ad.alertaId}" rows="2" placeholder="Nova ação a tomar..."></textarea></div>
+          <button class="btn ghost sm" onclick="Actions.registrarDecisaoAlerta('${ad.alertaId}')">Registrar nova tentativa</button>
+        ` : ''}
+      </div>`;
+    }
+
+    function cardHistorico(ad) {
+      return `<div class="card" style="margin-bottom:10px; opacity:.85;">
+        <div class="row-title">${ad.icone || '⚠️'} ${ad.titulo} <span style="color:var(--green); font-size:12px; font-weight:600;">✓ concluído</span></div>
+        ${ad.rodadas.map(r => rodadaHtml(r, ad.alertaId)).join('')}
+      </div>`;
+    }
+
+    el.innerHTML = `
+      <div class="topbar"><h1>Alertas Financeiros</h1></div>
+      <div class="logic-note"><span>ℹ️</span><div>Cada alerta olha só os meses já fechados (o mês em andamento nunca conta), pra não piscar por causa de um mês pela metade. Ao registrar uma decisão, o app guarda o número de hoje e reavalia sozinho 3 meses depois: se melhorou, a linha vai pro histórico como concluída; se não, você pode tentar outra ação sem perder o que já foi feito.</div></div>
+      ${!semDecisao.length && !comDecisao.length ? `<div class="card"><div class="stat-sub">Nenhum alerta ativo agora. 🎉</div></div>` : ''}
+      ${semDecisao.length ? `<div class="section-title">Precisam de uma decisão (${semDecisao.length})</div>${semDecisao.map(cardSemDecisao).join('')}` : ''}
+      ${comDecisao.length ? `<div class="section-title">Em andamento (${comDecisao.length})</div>${comDecisao.map(cardComDecisao).join('')}` : ''}
+      ${historico.length ? `<div class="section-title" style="cursor:pointer;" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'block' : 'none';">Histórico (${historico.length}) ▾</div><div style="display:none;">${historico.map(cardHistorico).join('')}</div>` : ''}`;
   },
 
   render_metas() {
@@ -2268,6 +2358,75 @@ const Actions = {
     }
     s.ativa = !vaiDesativar;
     await persist(); Nav.show('categorias');
+  },
+
+  // Quanto uma métrica "andou" entre o antes e o depois, na direção boa daquele alerta (0 = nada mudou,
+  // 1 = zerou o problema, negativo = piorou). Usado só pra decidir se uma rodada de decisão conta como
+  // "resultado positivo" (>= 20% de melhora) — o número em si aparece cru na tela, sem essa conta.
+  _melhoraAlerta(antes, depois, direcaoBoa) {
+    if (antes == null || depois == null) return 0;
+    if (antes === 0) return depois === 0 ? 0 : (direcaoBoa === 'maior' ? 1 : -1);
+    const delta = direcaoBoa === 'menor' ? (antes - depois) : (depois - antes);
+    return delta / Math.abs(antes);
+  },
+
+  // Roda toda vez que a tela de Alertas é aberta: para cada decisão ainda "ativa" cuja rodada mais
+  // recente já passou da data de avaliação (decisão + 3 meses), mede a mesma regra de novo NAQUELA
+  // data e decide se foi "resultado positivo" (não dispara mais, ou melhorou 20%+) ou "sem efeito"
+  // (some efeito neste caso não fecha a linha — fica ativa esperando uma nova tentativa do usuário).
+  // Só mexe em memória; quem chama decide se/quando persistir. Retorna true se mudou algo.
+  avaliarRodadasVencidasSync() {
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    let mudou = false;
+    (STATE.alertasDecisoes || []).forEach(ad => {
+      if (ad.status !== 'ativo') return;
+      const rodada = ad.rodadas[ad.rodadas.length - 1];
+      if (!rodada || rodada.avaliado || hojeISO < rodada.dataAvaliacao) return;
+      const medida = AppLogic.medirAlertaPorId(ad.alertaId, STATE, rodada.dataAvaliacao);
+      rodada.avaliado = true;
+      rodada.metricaDepois = medida ? medida.valor : null;
+      const melhora = medida ? Actions._melhoraAlerta(rodada.metricaAntes, medida.valor, medida.direcaoBoa) : 1;
+      if (!medida || !medida.dispara || melhora >= 0.2) {
+        rodada.resultado = 'positivo';
+        ad.status = 'concluido';
+      } else {
+        rodada.resultado = 'sem_efeito';
+      }
+      mudou = true;
+    });
+    return mudou;
+  },
+
+  // Registra a ação escolhida pra um alerta — seja a 1ª decisão (cria a linha do tempo) ou uma nova
+  // tentativa empilhada na MESMA linha (quando a anterior já foi avaliada como "sem efeito"), conforme
+  // pedido: manter o histórico das tentativas junto, não espalhar em cards separados.
+  async registrarDecisaoAlerta(alertaId) {
+    const textarea = document.getElementById('decisaoTexto_' + alertaId);
+    if (!textarea) return;
+    const acao = textarea.value.trim();
+    if (!acao) { alert('Descreva a ação que você vai tomar antes de registrar.'); return; }
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    const medida = AppLogic.medirAlertaPorId(alertaId, STATE, hojeISO);
+    STATE.alertasDecisoes = STATE.alertasDecisoes || [];
+    let ad = STATE.alertasDecisoes.find(x => x.alertaId === alertaId && x.status === 'ativo');
+    if (!ad) {
+      const alertaAtual = AppLogic.calcularAlertas(STATE, hojeISO).find(a => a.id === alertaId);
+      ad = {
+        id: 'ad_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        alertaId, titulo: alertaAtual ? alertaAtual.titulo : alertaId, icone: alertaAtual ? alertaAtual.icone : '⚠️',
+        status: 'ativo', rodadas: [],
+      };
+      STATE.alertasDecisoes.push(ad);
+    }
+    ad.rodadas.push({
+      id: 'rd_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      acao, dataDecisao: hojeISO,
+      metricaAntes: medida ? medida.valor : null,
+      dataAvaliacao: somarMeses(hojeISO, 3),
+      avaliado: false, metricaDepois: null, resultado: null,
+    });
+    await persist();
+    Nav.show('alertas');
   },
 
   mudarMes(delta) {
