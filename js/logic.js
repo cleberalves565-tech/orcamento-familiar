@@ -324,19 +324,21 @@ const AppLogic = (function () {
   }
 
   // ---- Regra 6: reserva de emergência (saldo líquido investido ÷ despesa média mensal) ----
-  // Fonte do "investido": a conta tipo "Investimento" (mesmo saldo do card "Patrimônio investido" no
-  // Painel geral) — NÃO a tabela manual STATE.investimentos ("Seus ativos"). Motivo: reserva de
-  // emergência exige liquidez real (resgate rápido, sem risco de perda de capital); um ativo manual
-  // como Tesouro RendA+ 2035 (vencimento longo, resgate antecipado com marcação a mercado) não cumpre
-  // isso e não deveria contar. Checado com o usuário: TODA a movimentação da conta Investimento (saldo
-  // inicial + aportes/resgates/rendimento) é CDB — genuinamente líquida — enquanto o RendA+ 2035 nunca
-  // passou por essa conta, só existe na tabela manual. Por isso a conta já é o pool certo, sem precisar
-  // de um sinalizador de liquidez por ativo.
+  // Fonte do "investido": SOMA das contas tipo "Investimento" marcadas com liquidaReserva===true —
+  // NÃO a tabela manual STATE.investimentos ("Seus ativos"), e não necessariamente todo o "Patrimônio
+  // investido" do Painel geral (que soma TODAS as contas Investimento, líquidas ou não). Motivo:
+  // reserva de emergência exige liquidez real (resgate rápido, sem risco de perda de capital); um
+  // ativo de vencimento longo (ex.: Tesouro RendA+ 2035, resgate antecipado com marcação a mercado)
+  // não cumpre isso. Em vez de adivinhar por nome/subcategoria (não dá — saldo inicial e rendimento
+  // ficam em categoria Ganhos, não Investimento, então uma flag por subcategoria não os enxergaria),
+  // a marcação é por CONTA, editável em Contas → "Conta pra reserva de emergência?". Contas sem o
+  // campo definido (liquidaReserva !== true) ficam de fora por padrão — mais seguro subestimar a
+  // reserva do que contar dinheiro que na prática está preso.
   function medirReserva(state, asOfISO) {
     const meses = mesesFechados(asOfISO, 6);
-    const contaInv = (state.contas || []).find(c => c.tipo === 'Investimento');
+    const contasLiquidas = (state.contas || []).filter(c => c.tipo === 'Investimento' && c.liquidaReserva === true);
     const lancsAte = state.lancamentos.filter(l => l.data <= asOfISO);
-    const totalInvestidoCents = contaInv ? centavos(calcularSaldoConta(contaInv.id, lancsAte)) + centavos(contaInv.saldoInicial || 0) : 0;
+    const totalInvestidoCents = contasLiquidas.reduce((s, c) => s + centavos(calcularSaldoConta(c.id, lancsAte)) + centavos(c.saldoInicial || 0), 0);
     const totalInvestido = reais(totalInvestidoCents);
     const despesaMedia = meses.reduce((s, ym) => s + despesaRealizadaNoMes(state, ym), 0) / (meses.length || 1);
     // Aqui o número que importa é a RAZÃO investido/despesa (ex.: 0,35 meses), não um valor em reais —

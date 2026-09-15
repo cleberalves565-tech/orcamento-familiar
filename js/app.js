@@ -1048,7 +1048,12 @@ const Render = {
     const temNegativa = contasAtivas.some(c => (AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0)) < 0);
     function cardConta(c, inativa) {
       const saldo = AppLogic.calcularSaldoConta(c.id, lancsAteHoje) + (c.saldoInicial || 0);
-      return `<div class="card" style="${inativa ? 'opacity:.5;' : ''}"><div class="stat-label">${c.nome}${inativa ? ' (desativada)' : ''}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub" style="display:flex; justify-content:space-between; align-items:center;">${c.tipo}<span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaAtiva(${c.id})">${inativa ? 'reativar' : 'desativar'}</span></div></div>`;
+      // Só faz sentido perguntar "conta pra reserva de emergência?" de conta tipo Investimento — é o
+      // único lugar de onde a regra de Alertas Financeiros (reserva de emergência) soma o valor. Uma
+      // conta nova nasce SEM contar (liquidaReserva ausente/false) — é mais seguro subestimar a reserva
+      // até você confirmar que aquele dinheiro é líquido de verdade do que inflar por padrão.
+      const liquidaLinha = (c.tipo === 'Investimento' && !inativa) ? `<div class="stat-sub" style="margin-top:4px; display:flex; justify-content:space-between; align-items:center;">🛟 Conta pra reserva de emergência: <b>${c.liquidaReserva ? 'sim' : 'não'}</b><span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaLiquidaReserva(${c.id})">alternar</span></div>` : '';
+      return `<div class="card" style="${inativa ? 'opacity:.5;' : ''}"><div class="stat-label">${c.nome}${inativa ? ' (desativada)' : ''}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub" style="display:flex; justify-content:space-between; align-items:center;">${c.tipo}<span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaAtiva(${c.id})">${inativa ? 'reativar' : 'desativar'}</span></div>${liquidaLinha}</div>`;
     }
     el.innerHTML = `
       <div class="topbar"><h1>Contas</h1><button class="btn" onclick="Modals.openNovaConta()">+ Nova conta</button></div>
@@ -1061,7 +1066,8 @@ const Render = {
       <div class="section-title">Saldo total</div>
       <div class="card"><div class="stat-value" style="font-size:26px;">${fmtMoeda(saldoTotalContas())}</div><div class="stat-sub">em ${contasAtivas.length} conta(s) ativa(s)</div></div>
       ${temNegativa ? `<div class="logic-note"><span>ℹ️</span><div><b>Saldo negativo aqui não é necessariamente um erro.</b> O saldo de cada conta soma as receitas e subtrai as despesas dos lançamentos importados, sem um "saldo inicial" de partida. Se a planilha original não registrava as transferências entre suas próprias contas (ex.: dinheiro que saía da Conta Corrente e ia pro PIX), a conta de destino aparece artificialmente negativa — o gasto foi real, só a origem do dinheiro não foi registrada. Posso corrigir isso quando quiser, definindo o saldo real de hoje como novo ponto de partida — é só pedir.</div></div>` : ''}
-      <div class="logic-note"><span>ℹ️</span><div>Pix Central e Dinheiro aparecem desativadas acima por causa do histórico — nenhuma das duas é uma conta de verdade, são formas de pagamento dentro de uma conta bancária (ex.: Conta Corrente), escolhidas na hora de lançar a transação. Por isso não entram mais no seletor de nova transação nem podem ser criadas de novo.</div></div>`;
+      <div class="logic-note"><span>ℹ️</span><div>Pix Central e Dinheiro aparecem desativadas acima por causa do histórico — nenhuma das duas é uma conta de verdade, são formas de pagamento dentro de uma conta bancária (ex.: Conta Corrente), escolhidas na hora de lançar a transação. Por isso não entram mais no seletor de nova transação nem podem ser criadas de novo.</div></div>
+      <div class="logic-note"><span>🛟</span><div>"Conta pra reserva de emergência" (nas contas tipo Investimento) controla o que soma no alerta de reserva, em Alertas Financeiros. Marque "sim" só se o dinheiro dessa conta tem liquidez real — resgate rápido (D+0/D+1) e sem risco de perder valor. Um investimento de vencimento longo (ex.: Tesouro com data distante) não deveria contar, mesmo sendo Renda Fixa.</div></div>`;
   },
 
   cartoesFiltroMeses: 12,
@@ -1925,9 +1931,13 @@ const Modals = {
     document.getElementById('modalNovaContaBody').innerHTML = `
       <div class="modal-head"><h3>Nova conta</h3><button class="close-x" onclick="Modals.close('novaConta')">✕</button></div>
       <div class="field"><label>Nome da conta</label><input id="ncNome" placeholder="Ex: Nubank, Itaú, BB"></div>
-      <div class="field"><label>Tipo</label><select id="ncTipo"><option>Conta Bancária</option><option>Investimento</option></select></div>
+      <div class="field"><label>Tipo</label><select id="ncTipo" onchange="document.getElementById('ncLiquidaWrap').style.display = this.value==='Investimento' ? 'block' : 'none';"><option>Conta Bancária</option><option>Investimento</option></select></div>
       <div class="logic-note"><span>ℹ️</span><div>Pix e Dinheiro não aparecem aqui de propósito — são formas de pagamento, não contas onde o dinheiro mora. Ao lançar uma transação, escolha a conta bancária de onde o dinheiro realmente saiu (ex.: Conta Corrente) e depois a forma de pagamento (Débito, Pix ou Dinheiro).</div></div>
       <div class="field"><label>Saldo atual (R$)</label><input id="ncSaldo" type="number" step="0.01" placeholder="0,00"></div>
+      <div class="field" id="ncLiquidaWrap" style="display:none;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:400;"><input type="checkbox" id="ncLiquidaReserva" style="width:auto;"> Conta pra reserva de emergência?</label>
+        <div class="stat-sub" style="margin-top:4px;">Marque só se o dinheiro tem liquidez real — resgate rápido, sem risco de perder valor. Fica desmarcado por padrão: mais seguro subestimar a reserva do que contar dinheiro que na prática está preso.</div>
+      </div>
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarConta()">Adicionar conta</button>`;
     Modals.open('novaConta');
   },
@@ -2264,7 +2274,12 @@ const Actions = {
   async salvarConta() {
     const nome = document.getElementById('ncNome').value.trim();
     if (!nome) return;
-    STATE.contas.push({ id: Actions.proximoIdCarteira(), nome, tipo: document.getElementById('ncTipo').value, ativa: true, ehCartao: false, saldoInicial: parseFloat(document.getElementById('ncSaldo').value) || 0 });
+    const liquidaEl = document.getElementById('ncLiquidaReserva');
+    STATE.contas.push({
+      id: Actions.proximoIdCarteira(), nome, tipo: document.getElementById('ncTipo').value, ativa: true, ehCartao: false,
+      saldoInicial: parseFloat(document.getElementById('ncSaldo').value) || 0,
+      liquidaReserva: !!(liquidaEl && liquidaEl.checked),
+    });
     await persist(); Modals.close('novaConta'); Nav.show('contas');
   },
   async salvarCartao() {
@@ -2346,6 +2361,12 @@ const Actions = {
       if (!confirm(`Desativar "${c.nome}"? Ela some do seletor de nova transação, mas os ${qtd} lançamento(s) já feitos nela e o saldo continuam intactos e visíveis aqui (em "contas desativadas").`)) return;
     }
     c.ativa = !vaiDesativar;
+    await persist(); Nav.show('contas');
+  },
+  async toggleContaLiquidaReserva(id) {
+    const c = STATE.contas.find(c => c.id === id);
+    if (!c || c.tipo !== 'Investimento') return;
+    c.liquidaReserva = !c.liquidaReserva;
     await persist(); Nav.show('contas');
   },
   async toggleSubcategoriaAtiva(id) {
