@@ -1520,6 +1520,20 @@ const Render = {
     const forecastValor = e => forecastModo === 'acumulado' ? e.saldoAcumulado : e.saldoMes;
     const maxSaldoForecast = Math.max(1, ...forecastSerie.map(e => Math.abs(forecastValor(e))));
 
+    // Média de gasto mensal e tendência — só meses FECHADOS (mês corrente fica de fora, senão um mês
+    // parcial puxa a média pra baixo de forma enganosa). Usa a mesma janela escolhida acima (6/12/24/
+    // todo o período), então responde diretamente "tô gastando mais ou menos" dentro do recorte visível
+    // no gráfico logo abaixo. Tendência compara a média dos últimos 3 meses fechados contra a média
+    // geral da janela: mais de 5% pra cima = alerta (vermelho), mais de 5% pra baixo = melhora (verde).
+    const janelaFechada = janela.filter(e => e.chave < chaveHoje);
+    const mediaGasto = janelaFechada.length ? janelaFechada.reduce((s, e) => s + e.despesa, 0) / janelaFechada.length : 0;
+    const ultimos3Fechados = janelaFechada.slice(-3);
+    const mediaUltimos3 = ultimos3Fechados.length ? ultimos3Fechados.reduce((s, e) => s + e.despesa, 0) / ultimos3Fechados.length : 0;
+    const variacaoPct = mediaGasto > 0 ? Math.round(((mediaUltimos3 - mediaGasto) / mediaGasto) * 100) : 0;
+    const tendCor = variacaoPct > 5 ? 'var(--red)' : variacaoPct < -5 ? 'var(--green)' : 'var(--text2)';
+    const tendSeta = variacaoPct > 5 ? '▲' : variacaoPct < -5 ? '▼' : '—';
+    const tendTexto = variacaoPct > 5 ? 'gastando mais' : variacaoPct < -5 ? 'gastando menos' : 'estável';
+
     el.innerHTML = `
       <div class="topbar"><h1>Relatórios</h1>${mesNavHtml()}</div>
       <div class="tabs">
@@ -1540,6 +1554,11 @@ const Render = {
         <button class="btn ghost sm" onclick="Actions.exportarCSV('tudo')">Exportar Excel — todo o período</button>
       </div>
       <div class="section-title">Evolução mês a mês${janelaN === 'todos' ? ' (todo o histórico com movimento)' : ''}</div>
+      <div class="grid grid-3" style="margin-bottom:10px;">
+        <div class="card"><div class="stat-label">Gasto médio mensal (${janelaFechada.length} ${janelaFechada.length===1?'mês fechado':'meses fechados'})</div><div class="stat-value down">${fmtMoeda(mediaGasto)}</div></div>
+        <div class="card"><div class="stat-label">Média últimos 3 meses fechados</div><div class="stat-value down">${fmtMoeda(mediaUltimos3)}</div></div>
+        <div class="card"><div class="stat-label">Tendência</div><div class="stat-value" style="color:${tendCor}; font-size:19px;">${tendSeta} ${Math.abs(variacaoPct)}% ${tendTexto}</div></div>
+      </div>
       <div class="tabs" style="margin-bottom:10px;">
         <div class="tab ${janelaN===6?'active':''}" onclick="Render.setRelatorioJanela(6)">6 meses</div>
         <div class="tab ${janelaN===12?'active':''}" onclick="Render.setRelatorioJanela(12)">12 meses</div>
