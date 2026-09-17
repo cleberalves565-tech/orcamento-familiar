@@ -1302,9 +1302,11 @@ const Render = {
     function cardComDecisao(ad) {
       const ultima = ad.rodadas[ad.rodadas.length - 1];
       const podeNovaTentativa = ultima && ultima.avaliado && ultima.resultado === 'sem_efeito';
+      const podeConcluirAgora = ultima && !ultima.avaliado;
       return `<div class="card" style="margin-bottom:10px;">
         <div class="row-title">${ad.icone || '⚠️'} ${ad.titulo}</div>
         ${ad.rodadas.map(r => rodadaHtml(r, ad.alertaId)).join('')}
+        ${podeConcluirAgora ? `<button class="btn ghost sm" onclick="Actions.concluirAlertaManual('${ad.alertaId}')">✅ Já conferi — concluir agora</button>` : ''}
         ${podeNovaTentativa ? `
           <div class="banner warn" style="margin:8px 0;"><span>⏳</span><div>A última ação ainda não deu resultado. Quer tentar outra abordagem? Fica registrado na mesma linha do tempo, sem perder o que já foi feito.</div></div>
           <div class="field"><textarea id="decisaoTexto_${ad.alertaId}" rows="2" placeholder="Nova ação a tomar..."></textarea></div>
@@ -2571,6 +2573,35 @@ const Actions = {
       dataAvaliacao: somarMeses(hojeISO, 3),
       avaliado: false, metricaDepois: null, resultado: null,
     });
+    await persist();
+    Nav.show('alertas');
+  },
+
+  // Fecha uma rodada "na mão", sem esperar os 3 meses da avaliação automática — pra quando você já
+  // conferiu por conta própria que o problema foi resolvido (ex.: revisou os lançamentos e corrigiu
+  // antes do prazo). IMPORTANTE: isso não é um "fechar sem checar" — ele roda a MESMA medição que a
+  // avaliação automática usaria, na data de hoje, e só marca como concluído se a métrica realmente não
+  // dispara mais. Se ainda estiver disparando, avisa e mantém a rodada ativa (fica registrado como
+  // "sem efeito", igual a uma avaliação automática que não deu certo) — assim o botão não vira uma
+  // forma de esconder alerta sem resolver de verdade.
+  async concluirAlertaManual(alertaId) {
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    const ad = STATE.alertasDecisoes.find(x => x.alertaId === alertaId && x.status === 'ativo');
+    if (!ad) return;
+    const rodada = ad.rodadas[ad.rodadas.length - 1];
+    if (!rodada || rodada.avaliado) return;
+    const medida = AppLogic.medirAlertaPorId(alertaId, STATE, hojeISO);
+    rodada.avaliado = true;
+    rodada.avaliacaoManual = true;
+    rodada.dataAvaliacao = hojeISO;
+    rodada.metricaDepois = medida ? medida.valor : null;
+    if (!medida || !medida.dispara) {
+      rodada.resultado = 'positivo';
+      ad.status = 'concluido';
+    } else {
+      rodada.resultado = 'sem_efeito';
+      alert('Conferi agora e o alerta ainda está disparando (' + formatarValorAlerta(alertaId, medida.valor) + '). Fica registrado como "sem efeito" — você pode descrever uma nova ação abaixo quando quiser.');
+    }
     await persist();
     Nav.show('alertas');
   },
