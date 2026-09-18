@@ -243,9 +243,8 @@ const Auth = {
       document.getElementById('app').style.display = 'flex';
       Nav.show('dashboard');
       this.resetInactivity();
-      Sync.checkNewerOnLogin(pinUsado);
-      Sync.iniciarLan(pinUsado);
-      Sync.iniciarGithub(pinUsado);
+      // OneDrive (arquivo), rede local e GitHub Gist foram desativados — a sincronização hoje é só
+      // pelo login com Google (mais simples, tempo real, sem token/arquivo pra gerenciar).
       Sync.iniciarGoogleListener(pinUsado);
     } catch (e) {
       if (msg) msg.textContent = 'PIN incorreto — tente novamente.';
@@ -532,8 +531,6 @@ const Auth = {
         document.getElementById('app').style.display = 'flex';
         Nav.show('dashboard');
         this.resetInactivity();
-        Sync.iniciarLan(this.pinBuffer);
-        Sync.iniciarGithub(this.pinBuffer);
         Sync.iniciarGoogleListener(this.pinBuffer);
       } catch (e) {
         // Antes, só avisava e limpava o campo quando o PIN chegava a 6 dígitos —
@@ -579,8 +576,6 @@ const Auth = {
     document.getElementById('app').style.display = 'flex';
     Nav.show('dashboard');
     this.resetInactivity();
-    Sync.iniciarLan(this.novoPin);
-    Sync.iniciarGithub(this.novoPin);
     if (AppGoogleSync.isSignedIn()) {
       try {
         const raw = await AppStorage.getRaw();
@@ -1706,33 +1701,9 @@ const Render = {
           <button class="btn ghost sm" onclick="document.getElementById('fileRestore').click()">Restaurar</button></div>
       </div>
       <div class="card" style="margin-bottom:10px;">
-        <div class="row-title" style="margin-bottom:8px;">Sincronização automática (Chrome/Edge no computador)</div>
-        <div id="syncConfigBody"><div class="stat-sub">Carregando status...</div></div>
-      </div>
-      <div class="card" style="margin-bottom:10px;">
-        <div class="row-title" style="margin-bottom:8px;">Sincronizar agora (funciona em qualquer navegador, inclusive celular)</div>
-        <div class="stat-sub" style="margin-bottom:10px;">Gera um arquivo com os dados atuais para você salvar na pasta do OneDrive, ou carrega um arquivo salvo por outro aparelho. Não depende de nenhum recurso especial do navegador — funciona em qualquer um.</div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="btn ghost sm" onclick="Actions.baixarSync()">Baixar arquivo para sincronizar</button>
-          <input type="file" id="fileSyncManual" style="display:none" onchange="Modals.abrirSyncManual(this.files[0])">
-          <button class="btn ghost sm" onclick="document.getElementById('fileSyncManual').click()">Carregar arquivo sincronizado</button>
-          <button class="btn ghost sm" onclick="Modals.abrirSyncColar()">Colar código de sincronização</button>
-        </div>
-        <div class="stat-sub" style="margin-top:8px;">Não consegue selecionar o arquivo no celular? Use "Colar código de sincronização" — abra o arquivo baixado com o navegador ou um app de texto, copie todo o conteúdo e cole no app.</div>
-      </div>
-      <div class="card" style="margin-bottom:10px;">
-        <div class="row-title" style="margin-bottom:8px;">Sincronização por rede local (Wi-Fi de casa)</div>
-        <div id="lanSyncConfigBody" class="stat-sub">Verificando...</div>
-      </div>
-      <div class="card" style="margin-bottom:10px;">
-        <div class="row-title" style="margin-bottom:8px;">🔵 Login com Google (recomendado)</div>
-        <div class="stat-sub" style="margin-bottom:10px;">A forma mais simples de manter os dois aparelhos atualizados: entre com a mesma conta Google nos dois. Atualiza em tempo real, sem token pra copiar e sem depender da mesma rede Wi-Fi.</div>
+        <div class="row-title" style="margin-bottom:8px;">🔵 Sincronização (login com Google)</div>
+        <div class="stat-sub" style="margin-bottom:10px;">Mantém os dois aparelhos atualizados sozinho: entre com a mesma conta Google nos dois. Atualiza em tempo real, sem token pra copiar, sem arquivo pra selecionar e sem depender da mesma rede Wi-Fi. Os métodos antigos (OneDrive, rede local, GitHub) foram desativados por não serem mais necessários.</div>
         <div id="googleSyncConfigBody">Verificando...</div>
-      </div>
-      <div class="card" style="margin-bottom:10px;">
-        <div class="row-title" style="margin-bottom:8px;">🌐 Sincronização pela internet (GitHub)</div>
-        <div class="stat-sub" style="margin-bottom:10px;">Mantém os dados atualizados nos dois aparelhos por internet comum — não depende de estar na mesma Wi-Fi de casa, nem de selecionar arquivo no celular. Usa um espaço privado na sua própria conta do GitHub para guardar o pacote já criptografado (o GitHub nunca vê os dados de verdade, só quem tem o PIN consegue abrir).</div>
-        <div id="githubSyncConfigBody">Verificando...</div>
       </div>
       <div class="card" style="margin-bottom:10px;">
         <div class="row"><div class="row-title">Integridade dos dados</div><div class="row-value" style="color:${integridade.divergentes.length?'var(--red)':'var(--green)'}">${integridade.ok}/${integridade.total} conferem</div></div>
@@ -1740,9 +1711,6 @@ const Render = {
       <div class="card">
         <div class="row"><div><div class="row-title" style="color:var(--danger-text);">Zerar dados</div><div class="row-sub">Apaga tudo permanentemente</div></div><button class="btn danger sm" onclick="Actions.zerarDados()">Zerar</button></div>
       </div>`;
-    this.fillSyncCard();
-    this.fillLanSyncCard();
-    this.fillGithubSyncCard();
     this.fillGoogleSyncCard();
   },
 
@@ -1791,7 +1759,7 @@ const Render = {
       { icone: '🤖', titulo: 'Chat IA', aberta: false, corpo: `
         <p>Um assistente pra tirar dúvidas sobre seus próprios dados financeiros dentro do app, em linguagem natural. Precisa estar configurado (ver indicador ON/OFF na barra lateral) pra funcionar.</p>` },
       { icone: '⚙️', titulo: 'Configurações', aberta: false, corpo: `
-        <p>Bloqueio automático por PIN, aparência (tema claro/escuro), backup e restauração, e as opções de sincronização entre aparelhos (login com Google, rede local Wi-Fi, ou GitHub). O login com Google é o mais simples: atualiza em tempo real nos dois aparelhos, sem precisar copiar nenhum código.</p>` },
+        <p>Bloqueio automático por PIN, aparência (tema claro/escuro), backup e restauração, e a sincronização entre aparelhos por login com Google — atualiza em tempo real nos dois aparelhos, sem precisar copiar nenhum código.</p>` },
     ];
 
     function itemHtml(s) {
@@ -2869,37 +2837,31 @@ const Sync = {
     if (!AppGoogleSync.isSignedIn()) return;
     AppGoogleSync.startListening((synced) => this.onGoogleChange(synced));
   },
+  // Antes, isso mostrava um banner pedindo pra você escolher "usar versão sincronizada ou manter esta".
+  // Só que a checagem logo abaixo (synced.atualizadoEm <= local.atualizadoEm) já garante matematicamente
+  // que só chegamos até aqui quando ESTE aparelho não tinha nenhuma alteração pendente pra perder — ou
+  // seja, nunca é um conflito de verdade, é só uma atualização de mão única vinda do outro aparelho.
+  // Por isso agora aplica sozinho, e só avisa com uma notinha que some sozinha (sem pedir decisão).
   async onGoogleChange(synced) {
-    const banner = document.getElementById('syncBanner');
-    if (!banner || !this._googlePin) return;
-    if (banner.innerHTML) return; // já tem um aviso na tela — não empilha
+    if (!this._googlePin) return;
     const local = await AppStorage.getRaw();
     if (local && local.atualizadoEm && synced.atualizadoEm <= local.atualizadoEm) return;
-    this._googlePendingRaw = synced;
-    const quando = new Date(synced.atualizadoEm).toLocaleString('pt-BR');
-    banner.innerHTML = `
-      <div class="banner info" style="margin:0 0 16px;">
-        <span>🔵</span>
-        <div style="flex:1;">
-          <b>Encontramos uma versão mais recente na conta Google</b> (salva em ${quando},
-          provavelmente do outro aparelho). Nada foi alterado ainda — escolha o que fazer:
-          <div style="display:flex; gap:10px; margin-top:10px;">
-            <button class="btn sm" onclick="Sync.usarVersaoGoogle()">Usar versão da conta Google</button>
-            <button class="btn ghost sm" onclick="document.getElementById('syncBanner').innerHTML=''">Manter esta versão</button>
-          </div>
-        </div>
-      </div>`;
-  },
-  async usarVersaoGoogle() {
     try {
-      const synced = this._googlePendingRaw || await AppGoogleSync.pull();
       STATE = await AppStorage.unlockVaultFromRaw(this._googlePin, synced);
       await AppStorage.adoptRaw(synced);
-      document.getElementById('syncBanner').innerHTML = '';
-      Nav.show('dashboard');
+      Nav.show(Nav.atual || 'dashboard');
+      this.avisoRapido('🔵 Dados atualizados com a versão mais recente (outro aparelho).');
     } catch (e) {
-      alert('Não foi possível carregar a versão da conta Google: ' + e.message);
+      // rede de segurança: se por algum motivo não der pra aplicar sozinho, ainda avisa em vez de
+      // falhar silenciosamente — mas sem travar a tela pedindo decisão.
+      this.avisoRapido('⚠️ Encontramos uma atualização mais recente na conta Google, mas não consegui aplicar sozinho agora. Tente reabrir o app.');
     }
+  },
+  avisoRapido(msg) {
+    const banner = document.getElementById('syncBanner');
+    if (!banner) return;
+    banner.innerHTML = `<div class="banner info" style="margin:0 0 16px;"><span>✓</span><div>${msg}</div></div>`;
+    setTimeout(() => { if (banner.innerHTML.includes(msg)) banner.innerHTML = ''; }, 4500);
   },
   async ativarGoogle() {
     await AppGoogleSync.signIn();
