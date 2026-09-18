@@ -2665,8 +2665,13 @@ const Actions = {
     a.click();
   },
   async zerarDados() {
-    if (!confirm('Isso apaga TODOS os dados permanentemente. Tem certeza?')) return;
-    if (!confirm('Confirme novamente: apagar tudo e começar do zero?')) return;
+    if (!confirm('Isso apaga os dados deste navegador permanentemente. Tem certeza?')) return;
+    if (!confirm('Confirme novamente: apagar tudo neste aparelho e começar do zero?')) return;
+    // Sai da conta Google ANTES de limpar — sem isso, a sessão continuava ativa depois do reload e,
+    // ao criar o PIN novo, o app enviava esse cofre vazio pro Firestore (sobrescrevendo o backup real
+    // na nuvem e, com a sincronização automática, propagando o vazio pro outro aparelho também). Com
+    // o logout primeiro, essa limpeza fica isolada neste navegador — a cópia na nuvem não é tocada.
+    try { await AppGoogleSync.signOutUser(); } catch (e) { /* segue mesmo se o logout falhar */ }
     localStorage.clear();
     if (typeof indexedDB !== 'undefined') indexedDB.deleteDatabase('orcamento_familiar_db');
     location.reload();
