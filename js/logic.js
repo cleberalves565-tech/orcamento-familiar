@@ -48,6 +48,10 @@ const AppLogic = (function () {
   // normal: é transferência interna, não gasto novo.
   const SUBCATEGORIA_REAPLICACAO_RENDIMENTO = 747;
   const CATEGORIA_GANHOS = 7;
+  // Rendimento do CDB recebido como ganho real (Ganhos > Investimento) — usada só para abater, na
+  // Receita de Orçamentos/Relatórios, a parcela desse rendimento que foi reaplicada no mesmo mês (ver
+  // calcularOrcadoRealizado). Mesma subcategoria 735 usada em app.js.
+  const SUBCATEGORIA_RENDIMENTO_INVESTIMENTO = 735;
   const SUBCATEGORIA_SALDO_INICIAL = 723;
   // Categoria criada para reconciliação: quando o saldo do app diverge do extrato real por causa de
   // lançamentos antigos faltando/duplicados espalhados pelo histórico (o método "saldo = receita −
@@ -121,17 +125,43 @@ const AppLogic = (function () {
         realizadoPorChave[chave] = (realizadoPorChave[chave] || 0) + centavos(p.valor);
       }
     }
+    // Reaplicação de rendimento de CDB no mesmo mês em que o rendimento foi recebido: aquele dinheiro
+    // nunca ficou disponível de verdade, então sai do total de Receita também — mesmo ajuste que o
+    // Painel geral/Relatórios já fazem (ver rendimentoCDBReaplicadoNoPeriodo em app.js). Guardado à
+    // parte pra abater da própria subcategoria de rendimento (Ganhos > Investimento) depois do loop.
+    let reaplicacaoRendimentoCents = 0;
     for (const l of lancamentos) {
       const [ly, lm] = l.data.split('-').map(Number);
       if (ly !== ano || lm !== mes) continue;
       const chave = l.categoriaId + '_' + l.subcategoriaId;
-      if (isAjusteSaldo(l)) continue;
+      // isTransferenciaInterna cobre pagamento de fatura, ajuste de saldo, a categoria inteira de
+      // Investimento (aportes/resgates), a categoria inteira de Metas e o Saldo Inicial importado —
+      // nenhum desses é ganho ou gasto novo, é dinheiro mudando de lugar. Antes esta função só
+      // filtrava isAjusteSaldo/isTransferenciaFatura, deixando aportes em Investimento e em Metas
+      // entrarem como "despesa realizada" aqui, mesmo já saindo do Painel geral (que usa
+      // isTransferenciaInterna via itensDoMes, em app.js). Esse descompasso de critério entre telas
+      // era o que fazia Orçamentos e Relatórios mostrarem um total de despesas maior que o Painel
+      // geral no mesmo mês — agora as três telas usam a mesma régua.
+      if (isTransferenciaInterna(l)) {
+        if (l.tipo === 'Despesa' && l.categoriaId === CATEGORIA_INVESTIMENTO_APORTE && l.subcategoriaId === SUBCATEGORIA_REAPLICACAO_RENDIMENTO) {
+          reaplicacaoRendimentoCents += centavos(l.valor);
+        }
+        continue;
+      }
       if (l.tipo === 'Despesa') {
-        if (isTransferenciaFatura(l)) continue;
         if (l.formaPagamento === 'Cartão de Crédito') continue;
         realizadoPorChave[chave] = (realizadoPorChave[chave] || 0) + centavos(l.valor);
       } else if (l.tipo === 'Receita') {
         realizadoReceitaPorChave[chave] = (realizadoReceitaPorChave[chave] || 0) + centavos(l.valor);
+      }
+    }
+    // Abate a reaplicação do rendimento da própria subcategoria de rendimento (Ganhos > Investimento,
+    // 735) — espelhando o mesmo ajuste que totalReceitasMes já faz em app.js, agora também aqui, pra
+    // Orçamentos e Relatórios baterem com o Painel geral na Receita, não só na Despesa.
+    if (reaplicacaoRendimentoCents > 0) {
+      const chaveRendimento = CATEGORIA_GANHOS + '_' + SUBCATEGORIA_RENDIMENTO_INVESTIMENTO;
+      if (realizadoReceitaPorChave[chaveRendimento]) {
+        realizadoReceitaPorChave[chaveRendimento] = Math.max(0, realizadoReceitaPorChave[chaveRendimento] - reaplicacaoRendimentoCents);
       }
     }
     const linhas = [];

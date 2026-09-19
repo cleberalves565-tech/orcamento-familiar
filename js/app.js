@@ -1636,7 +1636,7 @@ const Render = {
         <span class="stat-sub">Mostrar apenas subcategorias estouradas</span>
       </div>
       <table class="table" id="tabelaOrcRealizado"><tr><th>Subcategoria</th><th>Categoria</th><th>Orçado</th><th>Realizado</th><th>% do orçado</th><th>Status</th></tr>
-      ${linhas.map(l => `<tr class="rel-row" data-pct="${l.pct}"><td>${subcategoriaNome(l.subcategoriaId)}</td><td class="row-sub">${categoriaNome(l.categoriaId)}</td><td>${fmtMoeda(l.orcado)}</td><td>${fmtMoeda(l.realizado)}</td><td>${l.pct}%</td><td>${badge(l.status)}</td></tr>`).join('') || '<tr><td colspan="6" class="stat-sub">Sem orçamento definido neste mês.</td></tr>'}
+      ${linhas.map(l => `<tr class="rel-row" data-pct="${l.pct}"><td>${subcategoriaNome(l.subcategoriaId)}</td><td class="row-sub">${categoriaNome(l.categoriaId)}</td><td>${fmtMoeda(l.orcado)}</td><td>${fmtMoeda(l.realizado)}</td><td>${l.orcado > 0 ? l.pct + '%' : '— (sem orçamento definido)'}</td><td>${badge(l.status)}</td></tr>`).join('') || '<tr><td colspan="6" class="stat-sub">Sem orçamento definido neste mês.</td></tr>'}
       </table>`;
   },
 
