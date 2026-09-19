@@ -134,19 +134,19 @@ const AppLogic = (function () {
       const [ly, lm] = l.data.split('-').map(Number);
       if (ly !== ano || lm !== mes) continue;
       const chave = l.categoriaId + '_' + l.subcategoriaId;
-      // isTransferenciaInterna cobre pagamento de fatura, ajuste de saldo, a categoria inteira de
-      // Investimento (aportes/resgates), a categoria inteira de Metas e o Saldo Inicial importado —
-      // nenhum desses é ganho ou gasto novo, é dinheiro mudando de lugar. Antes esta função só
-      // filtrava isAjusteSaldo/isTransferenciaFatura, deixando aportes em Investimento e em Metas
-      // entrarem como "despesa realizada" aqui, mesmo já saindo do Painel geral (que usa
-      // isTransferenciaInterna via itensDoMes, em app.js). Esse descompasso de critério entre telas
-      // era o que fazia Orçamentos e Relatórios mostrarem um total de despesas maior que o Painel
-      // geral no mesmo mês — agora as três telas usam a mesma régua.
-      if (isTransferenciaInterna(l)) {
-        if (l.tipo === 'Despesa' && l.categoriaId === CATEGORIA_INVESTIMENTO_APORTE && l.subcategoriaId === SUBCATEGORIA_REAPLICACAO_RENDIMENTO) {
-          reaplicacaoRendimentoCents += centavos(l.valor);
-        }
-        continue;
+      // Só ficam de fora daqui por completo pagamento de fatura, ajuste de saldo e o Saldo Inicial
+      // importado — nenhum dos três é algo que faça sentido "orçar" mês a mês, então nunca deveriam
+      // aparecer como linha de orçamento realizado.
+      // Investimento (aporte/resgate) e Metas ENTRAM aqui normalmente, mesmo sendo transferência
+      // interna (dinheiro mudando de lugar, não gasto novo) — porque você pode ter um orçamento como
+      // "aportar R$500/mês em Renda Fixa", e essa linha precisa mostrar progresso real (ex.: 100%
+      // cumprido), não ficar travada em 0% pra sempre. O que muda para essas duas categorias é que elas
+      // ficam marcadas (ver `transferenciaInterna` abaixo) para o TOTAL GERAL de "Despesas do mês" (o
+      // velocímetro agregado, em Orçamentos) não somar aporte/meta junto com gasto de verdade — é isso
+      // que resolve a divergência com o Painel geral, sem apagar o acompanhamento de cada meta/aporte.
+      if (isAjusteSaldo(l) || isTransferenciaFatura(l) || (l.categoriaId === CATEGORIA_GANHOS && l.subcategoriaId === SUBCATEGORIA_SALDO_INICIAL)) continue;
+      if (l.tipo === 'Despesa' && l.categoriaId === CATEGORIA_INVESTIMENTO_APORTE && l.subcategoriaId === SUBCATEGORIA_REAPLICACAO_RENDIMENTO) {
+        reaplicacaoRendimentoCents += centavos(l.valor);
       }
       if (l.tipo === 'Despesa') {
         if (l.formaPagamento === 'Cartão de Crédito') continue;
@@ -184,6 +184,11 @@ const AppLogic = (function () {
       linhas.push({
         categoriaId: o.categoriaId, subcategoriaId: o.subcategoriaId, tipo: o.tipo,
         orcado: reais(orcadoCents), realizado: reais(realizadoCents), pct, status,
+        // Marca linhas de Investimento/Metas: continuam com realizado de verdade (pra rastrear se você
+        // bateu a meta de aporte/reserva do mês), mas quem soma um TOTAL GERAL de despesa (ex.: o
+        // velocímetro de "Despesas do mês" em Orçamentos) deve pular essas linhas — aporte/reserva não
+        // é gasto novo, e somar junto infla esse total e não bate com o Painel geral.
+        transferenciaInterna: o.categoriaId === CATEGORIA_INVESTIMENTO_APORTE || o.categoriaId === CATEGORIA_METAS,
       });
     }
     // Gasto/ganho real numa subcategoria SEM orçamento definido para o mês não pode ficar invisível
@@ -199,6 +204,7 @@ const AppLogic = (function () {
         linhas.push({
           categoriaId, subcategoriaId, tipo, orcado: 0, realizado: reais(realizadoCents),
           pct: 999, status: tipo === 'Receita' ? 'ok' : 'estourado',
+          transferenciaInterna: categoriaId === CATEGORIA_INVESTIMENTO_APORTE || categoriaId === CATEGORIA_METAS,
         });
         chavesCobertas.add(chave);
       });

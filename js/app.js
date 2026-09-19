@@ -1192,7 +1192,7 @@ const Render = {
     const linhas = AppLogic.calcularOrcadoRealizado(STATE.lancamentos, STATE.orcamentos, ano, mes, STATE.parcelas);
     const porCategoria = {};
     linhas.forEach(l => {
-      porCategoria[l.categoriaId] = porCategoria[l.categoriaId] || { orcado: 0, realizado: 0, subs: [], tipo: l.tipo };
+      porCategoria[l.categoriaId] = porCategoria[l.categoriaId] || { orcado: 0, realizado: 0, subs: [], tipo: l.tipo, transferenciaInterna: !!l.transferenciaInterna };
       porCategoria[l.categoriaId].orcado += AppLogic.centavos(l.orcado);
       porCategoria[l.categoriaId].realizado += AppLogic.centavos(l.realizado);
       porCategoria[l.categoriaId].subs.push(l);
@@ -1205,8 +1205,12 @@ const Render = {
     // Resumo geral do mês em 2 velocímetros — despesa e receita são dimensões diferentes (passar de
     // 100% é ruim numa, bom na outra), então cada um tem sua própria leitura de cor e status, do mesmo
     // jeito que já é tratado por categoria/subcategoria em calcularOrcadoRealizado.
-    const totalOrcadoDespesa = Object.values(porCategoria).filter(a => a.tipo === 'Despesa').reduce((s, a) => s + a.orcado, 0);
-    const totalRealizadoDespesa = Object.values(porCategoria).filter(a => a.tipo === 'Despesa').reduce((s, a) => s + a.realizado, 0);
+    // Investimento e Metas ficam de fora deste TOTAL GERAL (mas continuam com card próprio, com
+    // progresso real, logo abaixo) — aporte/reserva não é despesa nova, e somar aqui é o que fazia este
+    // velocímetro não bater com "Despesas do mês" do Painel geral.
+    const categoriasDespesaReal = Object.values(porCategoria).filter(a => a.tipo === 'Despesa' && !a.transferenciaInterna);
+    const totalOrcadoDespesa = categoriasDespesaReal.reduce((s, a) => s + a.orcado, 0);
+    const totalRealizadoDespesa = categoriasDespesaReal.reduce((s, a) => s + a.realizado, 0);
     const pctDespesaGeral = totalOrcadoDespesa > 0 ? (totalRealizadoDespesa / totalOrcadoDespesa) * 100 : 0;
     const statusDespesaGeral = pctDespesaGeral > 100 ? 'estourado' : (pctDespesaGeral >= 90 ? 'atencao' : 'ok');
 
@@ -1252,7 +1256,7 @@ const Render = {
           </div>`;
         }).join('') || '<div class="stat-sub">Nenhum orçamento definido para este mês.</div>'}
       </div>
-      <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem. Em categorias de receita (Ganhos), passar de 100% é positivo — por isso aparece em verde. Subcategorias com gasto/ganho real mas sem orçamento definido para o mês aparecem com orçado R$ 0 (100% fora do previsto), para bater sempre com o Painel geral.</div></div>`;
+      <div class="logic-note"><span>ℹ️</span><div>"Pagamento de Fatura" não entra aqui de propósito — já tratado como transferência, evitando dupla contagem. Em categorias de receita (Ganhos), passar de 100% é positivo — por isso aparece em verde. Subcategorias com gasto/ganho real mas sem orçamento definido para o mês aparecem com orçado R$ 0 (100% fora do previsto), para bater sempre com o Painel geral. <b>Investimento e Metas</b> têm seu próprio card com progresso real (útil para acompanhar se você bateu a meta de aporte/reserva do mês), mas ficam fora do total geral de "Despesas do mês" acima — aporte e reserva são dinheiro mudando de lugar, não gasto novo, e por isso também não entram nas despesas do Painel geral.</div></div>`;
   },
 
   render_alertas() {
