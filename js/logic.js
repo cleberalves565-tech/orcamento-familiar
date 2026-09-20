@@ -8,9 +8,20 @@ const AppLogic = (function () {
 
   function competenciaBase(dataCompraISO, diaFechamento, diaVencimento) {
     const [y, m, d] = dataCompraISO.split('-').map(Number);
-    const cicloOffset = (d <= diaFechamento) ? 1 : 2;
+    // Duas perguntas separadas — misturar as duas num "cicloOffset" único (versão antiga) só dava
+    // certo por coincidência para cartões em que o vencimento cai no mês seguinte ao fechamento
+    // (ex.: fecha dia 24, vence dia 5). Quebrava em silêncio para cartões como o Nubank, onde o
+    // vencimento cai no MESMO mês do fechamento (fecha dia 2, vence dia 9) — uma compra feita
+    // depois do fechamento ia parar 1 mês à frente do correto.
+    // 1) Em qual fatura (mês de fechamento) esta compra cai: a que fecha neste mês (se a compra foi
+    //    feita até o dia de fechamento) ou a que fecha no mês seguinte (se foi depois)?
+    const fechamentoOffset = (d <= diaFechamento) ? 0 : 1;
+    // 2) A partir do mês de fechamento, o vencimento cai no mesmo mês (dia de vencimento vem depois
+    //    do dia de fechamento no calendário) ou no mês seguinte (caso mais comum: dia de vencimento
+    //    é menor, então já "passou" dentro do mês do fechamento)?
+    const vencimentoOffset = (diaVencimento > diaFechamento) ? 0 : 1;
     const base = new Date(Date.UTC(y, m - 1, 1));
-    return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + cicloOffset, Math.min(diaVencimento, 28)));
+    return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + fechamentoOffset + vencimentoOffset, Math.min(diaVencimento, 28)));
   }
 
   function gerarParcelas(valorTotal, qtd, dataCompraISO, diaFechamento, diaVencimento) {
