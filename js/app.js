@@ -53,6 +53,7 @@ let STATE = null;
 const HOJE_INICIAL = new Date();
 let VIEW = { ano: HOJE_INICIAL.getFullYear(), mes: HOJE_INICIAL.getMonth() + 1 };
 let inactivityTimer = null;
+let IMPORT_PREVIEW = null; // resultado da última validação de importação de CSV (ver Actions.processarArquivoImportacao)
 
 // ---------------- Construção do estado inicial a partir da planilha ----------------
 function buildInitialStateFromSeed() {
@@ -634,6 +635,135 @@ function lancamentosDoMes(ano, mes) {
   return STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m === mes; });
 }
 
+// ---------------- Importação de lançamentos em lote (CSV) ----------------
+// Formato: mesmo do "Exportar Excel" (Actions.exportarCSV) — cabeçalho
+// Data;Tipo;Categoria;Subcategoria;Descricao;Valor;FormaPagamento;ContaOuCartao;Parcela.
+// Nomes de categoria/subcategoria/conta/cartão são comparados sem acento, emoji ou diferença de
+// maiúscula/minúscula, para não exigir que a pessoa digite o emoji exato que aparece no app.
+function normalizarNomeImportacao(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^\p{L}\p{N} ]/gu, '')
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function encontrarCategoriaImport(nome) {
+  const alvo = normalizarNomeImportacao(nome);
+  return STATE.categorias.find(c => normalizarNomeImportacao(c.nome) === alvo) || null;
+}
+function encontrarSubcategoriaImport(nome, categoriaId) {
+  const alvo = normalizarNomeImportacao(nome);
+  return STATE.subcategorias.find(s => s.categoriaId === categoriaId && normalizarNomeImportacao(s.nome) === alvo) || null;
+}
+function encontrarContaOuCartaoImport(nome) {
+  // Mesma regra da tela "Nova transação": contas do tipo Digital/Físico (ex.: um PIX Central antigo)
+  // não são um lugar onde o dinheiro mora, então não valem como destino de um lançamento novo.
+  const alvo = normalizarNomeImportacao(nome);
+  const conta = STATE.contas.find(c => Modals.contaSelecionavel(c) && normalizarNomeImportacao(c.nome) === alvo);
+  if (conta) return { obj: conta, isCartao: false };
+  const cartao = STATE.cartoes.find(c => c.ativa !== false && normalizarNomeImportacao(c.nome) === alvo);
+  if (cartao) return { obj: cartao, isCartao: true };
+  return null;
+}
+// Parser CSV simples com suporte a campos entre aspas (mesma regra de escape usada em exportarCSV:
+// aspas duplicadas dentro de um campo citado viram uma aspa literal).
+function parseCSVImportacao(texto) {
+  if (texto.charCodeAt(0) === 0xFEFF) texto = texto.slice(1);
+  const linhas = [];
+  let campo = '', linha = [], dentroAspas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const ch = texto[i];
+    if (dentroAspas) {
+      if (ch === '"' && texto[i + 1] === '"') { campo += '"'; i++; }
+      else if (ch === '"') { dentroAspas = false; }
+      else { campo += ch; }
+    } else if (ch === '"') { dentroAspas = true; }
+    else if (ch === ';') { linha.push(campo); campo = ''; }
+    else if (ch === '\r') { /* ignora — \n cuida da quebra de linha */ }
+    else if (ch === '\n') { linha.push(campo); linhas.push(linha); campo = ''; linha = []; }
+    else { campo += ch; }
+  }
+  if (campo !== '' || linha.length) { linha.push(campo); linhas.push(linha); }
+  return linhas.filter(l => l.some(c => c.trim() !== ''));
+}
+function validarLinhaImportacao(campos, numeroLinha) {
+  const erros = [];
+  const [dataRaw, tipoRaw, categoriaRaw, subcategoriaRaw, descricaoRaw, valorRaw, formaPagamentoRaw, contaRaw, parcelaRaw] =
+    campos.map(c => (c == null ? '' : String(c)).trim());
+  const descricao = descricaoRaw;
+
+  let data = null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dataRaw)) data = dataRaw;
+  else if (/^\d{2}\/\d{2}\/\d{4}$/.test(dataRaw)) { const [d, m, a] = dataRaw.split('/'); data = `${a}-${m}-${d}`; }
+  if (!data) { erros.push('Data inválida — use AAAA-MM-DD ou DD/MM/AAAA'); }
+  else {
+    const [ay, am, ad] = data.split('-').map(Number);
+    const dt = new Date(ay, am - 1, ad);
+    if (dt.getFullYear() !== ay || dt.getMonth() !== am - 1 || dt.getDate() !== ad) { erros.push('Data inválida'); data = null; }
+  }
+
+  const tipoNorm = normalizarNomeImportacao(tipoRaw);
+  const tipo = tipoNorm === 'receita' ? 'Receita' : tipoNorm === 'despesa' ? 'Despesa' : null;
+  if (!tipo) erros.push('Tipo deve ser "Receita" ou "Despesa"');
+
+  const categoria = categoriaRaw ? encontrarCategoriaImport(categoriaRaw) : null;
+  if (!categoriaRaw) erros.push('Categoria em branco');
+  else if (!categoria) erros.push(`Categoria "${categoriaRaw}" não encontrada`);
+  else if (categoria.id === AppLogic.CATEGORIA_PAGAMENTO_FATURA) erros.push('Pagamento de Fatura não é suportado pelo import — lance manualmente no app');
+
+  let subcategoria = null;
+  if (categoria) {
+    subcategoria = subcategoriaRaw ? encontrarSubcategoriaImport(subcategoriaRaw, categoria.id) : null;
+    if (!subcategoriaRaw) erros.push('Subcategoria em branco');
+    else if (!subcategoria) erros.push(`Subcategoria "${subcategoriaRaw}" não encontrada em "${categoria.nome}"`);
+  }
+
+  if (!descricao) erros.push('Descrição em branco');
+
+  let valor = null;
+  if (!valorRaw) erros.push('Valor em branco');
+  else {
+    const valorNorm = valorRaw.includes(',') ? valorRaw.replace(/\./g, '').replace(',', '.') : valorRaw;
+    const v = parseFloat(valorNorm);
+    if (isNaN(v) || v <= 0) erros.push('Valor inválido — deve ser um número positivo (ex: 150,00)');
+    else valor = v;
+  }
+
+  const destino = contaRaw ? encontrarContaOuCartaoImport(contaRaw) : null;
+  if (!contaRaw) erros.push('Conta/Cartão em branco');
+  else if (!destino) erros.push(`Conta ou cartão "${contaRaw}" não encontrado`);
+  else if (destino.obj.ativa === false) erros.push(`Conta/cartão "${contaRaw}" está desativado`);
+
+  let formaPagamento = null;
+  if (destino && !destino.isCartao && destino.obj.tipo === 'Conta Bancária') {
+    const mapaFp = { debito: 'Débito', pix: 'Pix', dinheiro: 'Dinheiro' };
+    formaPagamento = mapaFp[normalizarNomeImportacao(formaPagamentoRaw)] || null;
+    if (!formaPagamento) erros.push('FormaPagamento deve ser Débito, Pix ou Dinheiro (obrigatório para contas bancárias)');
+  }
+
+  let qtdParcelas = 1;
+  if (destino && destino.isCartao) {
+    const m = parcelaRaw.match(/(\d+)\s*\/\s*(\d+)/);
+    if (m) qtdParcelas = parseInt(m[2], 10);
+    else if (/^\d+$/.test(parcelaRaw) && parcelaRaw !== '') qtdParcelas = parseInt(parcelaRaw, 10);
+    if (!qtdParcelas || qtdParcelas < 1 || qtdParcelas > MAX_PARCELAS) erros.push(`Parcelas deve ser um número entre 1 e ${MAX_PARCELAS}`);
+  }
+
+  let duplicataProvavel = false;
+  if (data && valor && descricao && destino) {
+    duplicataProvavel = STATE.lancamentos.some(l => l.data === data && Math.abs(l.valor - valor) < 0.005
+      && normalizarNomeImportacao(l.descricao) === normalizarNomeImportacao(descricao) && l.carteiraId === destino.obj.id);
+  }
+
+  return {
+    numeroLinha, camposOriginais: campos, erros, ok: erros.length === 0, duplicataProvavel,
+    resolvido: erros.length === 0 ? {
+      data, tipo, categoriaId: categoria.id, subcategoriaId: subcategoria.id, descricao, valor,
+      carteiraId: destino.obj.id, isCartao: destino.isCartao, qtdParcelas, formaPagamento,
+      categoriaNomeResolvido: categoria.nome, subcategoriaNomeResolvido: subcategoria.nome, contaNomeResolvida: destino.obj.nome,
+    } : null,
+  };
+}
+
 // ---------------- Alertas Financeiros — helpers de exibição ----------------
 function somarMeses(dataISO, n) {
   const [y, m, d] = dataISO.split('-').map(Number);
@@ -1050,6 +1180,7 @@ const Render = {
         <span>Despesas: <b class="down">${fmtMoeda(despesas)}</b></span>
         <span>Saldo líquido: <b>${fmtMoeda(receitas - despesas)}</b></span>
         <button class="btn ghost sm" onclick="Actions.exportarCSV('mes')">Exportar Excel (mês)</button>
+        <button class="btn ghost sm" onclick="Modals.openImportarLancamentos()">📥 Importar lançamentos</button>
       </div>
       <div class="fab"><button class="fab-btn" onclick="Modals.openNovaTransacao()">+ Nova transação</button></div>`;
   },
@@ -2124,6 +2255,67 @@ const Modals = {
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarSubcategoria()">Criar</button>`;
     Modals.open('novaSubcategoria');
   },
+
+  openImportarLancamentos() {
+    IMPORT_PREVIEW = null;
+    document.getElementById('modalImportarLancamentosBody').innerHTML = `
+      <div class="modal-head"><h3>Importar lançamentos (CSV)</h3><button class="close-x" onclick="Modals.close('importarLancamentos')">✕</button></div>
+      <div class="logic-note"><span>ℹ️</span><div>Mesmo formato do botão <b>Exportar Excel</b>: colunas <b>Data;Tipo;Categoria;Subcategoria;Descricao;Valor;FormaPagamento;ContaOuCartao;Parcela</b>, separadas por ponto e vírgula. Categoria, Subcategoria e Conta/Cartão precisam já existir no app com o mesmo nome (não precisa digitar o emoji). "Pagamento de Fatura" não é suportado — lance essas manualmente. Nada é gravado até você conferir a prévia e confirmar.</div></div>
+      <div style="margin-bottom:14px;"><button class="btn ghost sm" onclick="Actions.baixarModeloImportacao()">⬇️ Baixar modelo CSV</button></div>
+      <div class="field"><label>Selecione o arquivo CSV</label><input type="file" accept=".csv,text/csv" onchange="Actions.processarArquivoImportacao(this.files[0])"></div>
+      <div id="importPreviewArea"></div>`;
+    Modals.open('importarLancamentos');
+  },
+  renderPreviaImportacao() {
+    const area = document.getElementById('importPreviewArea');
+    if (!area) return;
+    if (!IMPORT_PREVIEW) { area.innerHTML = ''; return; }
+    const total = IMPORT_PREVIEW.length;
+    const comErro = IMPORT_PREVIEW.filter(r => !r.ok);
+    const duplicatas = IMPORT_PREVIEW.filter(r => r.ok && r.duplicataProvavel);
+    const prontas = IMPORT_PREVIEW.filter(r => r.selecionada);
+    area.innerHTML = `
+      <div class="banner ${comErro.length ? 'warn' : 'info'}" style="margin-top:12px;">
+        <span>${comErro.length ? '⚠️' : '✅'}</span>
+        <div><b>${total} linha(s) lidas do arquivo</b> — ${total - comErro.length} válida(s), ${comErro.length} com erro${duplicatas.length ? `, ${duplicatas.length} possível(is) duplicata(s) (desmarcada(s) por padrão)` : ''}. Confira linha por linha e desmarque o que não quiser importar.</div>
+      </div>
+      <div style="max-height:360px; overflow:auto; margin:10px 0;">
+      <table class="table" style="font-size:12px;">
+        <tr><th></th><th>Linha</th><th>Data</th><th>Tipo</th><th>Categoria</th><th>Subcategoria</th><th>Descrição</th><th>Valor</th><th>Conta/Cartão</th><th>Situação</th></tr>
+        ${IMPORT_PREVIEW.map((r, idx) => {
+          const d = r.resolvido;
+          const situacao = !r.ok ? `<span style="color:#d33;">${r.erros.join('; ')}</span>`
+            : r.duplicataProvavel ? '<span style="color:#b8860b;">Possível duplicata já existente</span>'
+            : '<span style="color:#2a8;">OK</span>';
+          return `<tr>
+            <td>${r.ok ? `<input type="checkbox" ${r.selecionada ? 'checked' : ''} onchange="Modals.toggleLinhaImportacao(${idx}, this.checked)">` : ''}</td>
+            <td>${r.numeroLinha}</td>
+            <td>${d ? d.data : (r.camposOriginais[0] || '')}</td>
+            <td>${d ? d.tipo : (r.camposOriginais[1] || '')}</td>
+            <td>${d ? d.categoriaNomeResolvido : (r.camposOriginais[2] || '')}</td>
+            <td>${d ? d.subcategoriaNomeResolvido : (r.camposOriginais[3] || '')}</td>
+            <td>${r.camposOriginais[4] || ''}</td>
+            <td>${d ? fmtMoeda(d.valor) : (r.camposOriginais[5] || '')}</td>
+            <td>${d ? d.contaNomeResolvida : (r.camposOriginais[7] || '')}</td>
+            <td>${situacao}</td>
+          </tr>`;
+        }).join('')}
+      </table>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <span class="stat-sub">${prontas.length} de ${total} linha(s) marcada(s) para importar.</span>
+        <div style="display:flex; gap:10px;">
+          <button class="btn ghost sm" onclick="Modals.close('importarLancamentos')">Cancelar</button>
+          <button class="btn sm" ${prontas.length ? '' : 'disabled'} onclick="Actions.confirmarImportacao()">Confirmar importação (${prontas.length})</button>
+        </div>
+      </div>`;
+  },
+  toggleLinhaImportacao(idx, checked) {
+    if (!IMPORT_PREVIEW || !IMPORT_PREVIEW[idx]) return;
+    IMPORT_PREVIEW[idx].selecionada = checked;
+    Modals.renderPreviaImportacao();
+  },
+
   abrirSyncManual(file) {
     if (!file) return;
     Sync._arquivoManualPendente = file;
@@ -2247,6 +2439,56 @@ const Modals = {
 };
 
 // ---------------- Actions (CRUD) ----------------
+// Cria um (ou dois, no caso de aporte em investimento) lançamento(s) a partir de dados já validados,
+// incluindo geração de parcelas de cartão e a 2ª perna automática de investimento (ver comentário em
+// Actions.salvarTransacao). Usada tanto pelo formulário "Nova transação" quanto pelo importador de CSV
+// em lote — mesma regra de negócio nos dois lugares, para nunca existirem dois jeitos diferentes de
+// "criar um lançamento" divergindo com o tempo (foi exatamente esse tipo de duplicação de lógica que
+// causou a inconsistência entre Painel e Orçamentos corrigida em 20260919).
+// Não chama persist() — quem chama decide se salva um por um ou em lote (import).
+function criarLancamentoCompleto({ data, tipo, categoriaId, subcategoriaId, descricao, valor, carteiraId, isCartao, qtdParcelas, cartaoFaturaId, contaInvestimentoId, formaPagamento }) {
+  qtdParcelas = isCartao ? (qtdParcelas || 1) : 1;
+  const contaSelecionada = !isCartao ? STATE.contas.find(c => c.id === carteiraId) : null;
+  const formaPagamentoFinal = isCartao ? 'Cartão de Crédito'
+    : (contaSelecionada && contaSelecionada.tipo === 'Conta Bancária') ? (formaPagamento || 'Débito')
+    : 'Outro';
+  const lanc = {
+    id: uuid(), data, tipo, categoriaId, subcategoriaId, descricao, valor,
+    formaPagamento: formaPagamentoFinal, carteiraId,
+    qtdParcelas, parcelaAtual: 1, cartaoFaturaId: cartaoFaturaId || null,
+  };
+  STATE.lancamentos.push(lanc);
+  const criados = [lanc];
+
+  if (isCartao) {
+    const cartao = STATE.cartoes.find(c => c.id === carteiraId);
+    if (cartao) {
+      const geradas = AppLogic.gerarParcelas(valor, qtdParcelas, data, cartao.diaFechamento, cartao.diaVencimento);
+      geradas.forEach(g => STATE.parcelas.push({
+        id: uuid(), lancamentoId: lanc.id, carteiraId, categoriaId, subcategoriaId,
+        valor: g.valor, numero: g.numero, qtd: g.qtd, ano: g.ano, mes: g.mes,
+      }));
+    }
+  }
+
+  if (!isCartao && tipo === 'Despesa' && categoriaId === AppLogic.CATEGORIA_INVESTIMENTO_APORTE) {
+    const contaInvestimento = contaInvestimentoId
+      ? STATE.contas.find(c => c.id === contaInvestimentoId)
+      : STATE.contas.find(c => c.tipo === 'Investimento');
+    if (contaInvestimento && contaInvestimento.id !== carteiraId) {
+      const perna2 = {
+        id: uuid(), data, tipo: 'Receita', categoriaId, subcategoriaId,
+        descricao: descricao + ' (entrada na conta ' + contaInvestimento.nome + ')', valor,
+        formaPagamento: 'Transferência', carteiraId: contaInvestimento.id,
+        qtdParcelas: 1, parcelaAtual: 1, cartaoFaturaId: null,
+      };
+      STATE.lancamentos.push(perna2);
+      criados.push(perna2);
+    }
+  }
+  return criados;
+}
+
 const Actions = {
   async salvarTransacao() {
     const tipo = document.getElementById('ntTipo').value;
@@ -2264,49 +2506,22 @@ const Actions = {
     const cartaoFaturaId = isPagamentoFatura ? Number(document.getElementById('ntCartaoFatura').value) || null : null;
 
     const contaSelecionada = !isCartao ? STATE.contas.find(c => c.id === carteiraId) : null;
-    const formaPagamento = isCartao ? 'Cartão de Crédito'
-      : (contaSelecionada && contaSelecionada.tipo === 'Conta Bancária') ? document.getElementById('ntFormaPagamento').value
-      : 'Outro';
-    const lanc = {
-      id: uuid(), data, tipo, categoriaId, subcategoriaId, descricao, valor,
-      formaPagamento, carteiraId,
-      qtdParcelas, parcelaAtual: 1, cartaoFaturaId,
-    };
-    STATE.lancamentos.push(lanc);
-
-    if (isCartao) {
-      const cartao = STATE.cartoes.find(c => c.id === carteiraId);
-      const geradas = AppLogic.gerarParcelas(valor, qtdParcelas, data, cartao.diaFechamento, cartao.diaVencimento);
-      geradas.forEach(g => STATE.parcelas.push({
-        id: uuid(), lancamentoId: lanc.id, carteiraId, categoriaId, subcategoriaId,
-        valor: g.valor, numero: g.numero, qtd: g.qtd, ano: g.ano, mes: g.mes,
-      }));
-    }
+    const formaPagamento = (contaSelecionada && contaSelecionada.tipo === 'Conta Bancária')
+      ? document.getElementById('ntFormaPagamento').value : null;
 
     // Aporte em investimento (categoria 💰Investimento: Renda Fixa, Renda Variável, Bolsa, Consórcio,
     // DinDin, Reaplicação de rendimento) saindo de uma conta comum é uma transferência de 2 pernas —
-    // dinheiro sai da conta comum (esta Despesa) e entra na conta Investimento. Antes só a perna de
-    // saída era criada por aqui; a de entrada tinha que ser lançada à parte e já ficou faltando 2
-    // vezes na prática. Agora a perna de entrada é criada junto, automaticamente.
-    if (!isCartao && tipo === 'Despesa' && categoriaId === 5) {
-      // Com 2+ contas de investimento, o campo "Investir em qual conta?" (visível só nesse caso)
-      // diz o destino certo; com 1 só, não tem ambiguidade e cai na de sempre — mesmo comportamento
-      // de antes preservado pro caso comum.
-      const campoDestino = document.getElementById('ntCampoContaInvestimento');
-      const destinoEscolhidoId = campoDestino && campoDestino.style.display !== 'none'
-        ? Number(document.getElementById('ntContaInvestimento').value) : null;
-      const contaInvestimento = destinoEscolhidoId
-        ? STATE.contas.find(c => c.id === destinoEscolhidoId)
-        : STATE.contas.find(c => c.tipo === 'Investimento');
-      if (contaInvestimento && contaInvestimento.id !== carteiraId) {
-        STATE.lancamentos.push({
-          id: uuid(), data, tipo: 'Receita', categoriaId, subcategoriaId,
-          descricao: descricao + ' (entrada na conta ' + contaInvestimento.nome + ')', valor,
-          formaPagamento: 'Transferência', carteiraId: contaInvestimento.id,
-          qtdParcelas: 1, parcelaAtual: 1, cartaoFaturaId: null,
-        });
-      }
-    }
+    // dinheiro sai da conta comum (esta Despesa) e entra na conta Investimento. Com 2+ contas de
+    // investimento, o campo "Investir em qual conta?" (visível só nesse caso) diz o destino certo;
+    // com 1 só, não tem ambiguidade e criarLancamentoCompleto cai na de sempre.
+    const campoDestino = document.getElementById('ntCampoContaInvestimento');
+    const contaInvestimentoId = campoDestino && campoDestino.style.display !== 'none'
+      ? Number(document.getElementById('ntContaInvestimento').value) : null;
+
+    criarLancamentoCompleto({
+      data, tipo, categoriaId, subcategoriaId, descricao, valor, carteiraId, isCartao,
+      qtdParcelas, cartaoFaturaId, contaInvestimentoId, formaPagamento,
+    });
 
     await persist();
     Modals.close('novaTransacao');
@@ -2634,6 +2849,59 @@ const Actions = {
     a.href = URL.createObjectURL(blob);
     a.download = nomeArquivo;
     a.click();
+  },
+
+  baixarModeloImportacao() {
+    const contaEx = (STATE.contas.find(c => Modals.contaSelecionavel(c)) || {}).nome || 'Conta Corrente';
+    const cab = ['Data', 'Tipo', 'Categoria', 'Subcategoria', 'Descricao', 'Valor', 'FormaPagamento', 'ContaOuCartao', 'Parcela'];
+    const linhas = [
+      ['2026-01-05', 'Despesa', 'Gastos Fixos', 'Aluguel', 'Aluguel de janeiro', '1500,00', 'Débito', contaEx, ''],
+      ['2026-01-07', 'Receita', 'Ganhos', 'Salário', 'Salário de janeiro', '5000,00', 'Pix', contaEx, ''],
+    ];
+    const csv = '﻿' + cab.join(';') + '\r\n' + linhas.map(l => l.join(';')).join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'modelo-importacao-lancamentos.csv';
+    a.click();
+  },
+
+  async processarArquivoImportacao(file) {
+    if (!file) return;
+    const texto = await file.text();
+    let linhas = parseCSVImportacao(texto);
+    if (!linhas.length) { alert('Não encontrei nenhuma linha de dados nesse arquivo.'); return; }
+    // A primeira linha costuma ser o cabeçalho (Data;Tipo;...) — pula automaticamente se for o caso,
+    // mas não exige que exista, caso a pessoa remova o cabeçalho ao editar no Excel.
+    if (normalizarNomeImportacao(linhas[0][0]) === 'data') linhas = linhas.slice(1);
+    if (!linhas.length) { alert('O arquivo só tem cabeçalho, sem lançamentos.'); return; }
+    IMPORT_PREVIEW = linhas.map((campos, i) => {
+      const r = validarLinhaImportacao(campos, i + 2); // linha 2 = 1ª linha de dados (linha 1 é o cabeçalho)
+      r.selecionada = r.ok && !r.duplicataProvavel;
+      return r;
+    });
+    Modals.renderPreviaImportacao();
+  },
+
+  async confirmarImportacao() {
+    if (!IMPORT_PREVIEW) return;
+    const linhas = IMPORT_PREVIEW.filter(r => r.ok && r.selecionada);
+    if (!linhas.length) { alert('Nenhuma linha marcada para importar.'); return; }
+    if (!confirm(`Confirma a importação de ${linhas.length} lançamento(s)? Isso grava direto no seu cofre de dados.`)) return;
+    for (const r of linhas) {
+      const d = r.resolvido;
+      criarLancamentoCompleto({
+        data: d.data, tipo: d.tipo, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
+        descricao: d.descricao, valor: d.valor, carteiraId: d.carteiraId, isCartao: d.isCartao,
+        qtdParcelas: d.qtdParcelas, cartaoFaturaId: null, contaInvestimentoId: null, formaPagamento: d.formaPagamento,
+      });
+    }
+    await persist();
+    const qtd = linhas.length;
+    IMPORT_PREVIEW = null;
+    Modals.close('importarLancamentos');
+    Nav.show(Nav.atual);
+    alert(`${qtd} lançamento(s) importado(s) com sucesso.`);
   },
 
   async exportBackup() {

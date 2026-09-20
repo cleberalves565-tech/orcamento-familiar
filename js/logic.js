@@ -549,5 +549,6 @@ const AppLogic = (function () {
     calcularFaturaCartao, calcularSaldoConta, calcularOrcadoRealizado, detectarEstouros,
     calcularAlertas, medirAlertaPorId,
     CATEGORIA_PAGAMENTO_FATURA, CATEGORIA_AJUSTE_SALDO, CATEGORIA_METAS, CATEGORIA_GANHOS,
+    CATEGORIA_INVESTIMENTO_APORTE,
   };
 })();
