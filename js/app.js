@@ -631,6 +631,24 @@ function contaOuCartaoNome(id) {
   const k = STATE.cartoes.find(k => k.id === id); if (k) return k.nome;
   return '—';
 }
+// Data sugerida ao abrir "Nova transação": hoje de verdade, se o mês em tela (VIEW) for o mês atual —
+// que é o caso mais comum (lançar algo que acabou de acontecer). Antes vinha fixo no dia 1º do mês em
+// tela, mesmo com o app aberto no dia 20, o que exigia corrigir a data toda vez. Se a pessoa navegou
+// pra outro mês (passado ou futuro) e abre "Nova transação" de lá, "hoje" não faria sentido como
+// sugestão — nesse caso mantém o dia 1º daquele mês, como já era.
+function dataPadraoNovaTransacao() {
+  const hoje = new Date();
+  if (VIEW.ano === hoje.getFullYear() && VIEW.mes === hoje.getMonth() + 1) {
+    // Usa os componentes LOCAIS da data (getFullYear/getMonth/getDate), não toISOString() — toISOString()
+    // converte pra UTC, e como o Brasil está atrás do UTC (ex.: UTC-3), depois das 21h o "hoje" em UTC já
+    // é amanhã. Lançar hoje à noite sugeriria a data errada.
+    const dia = String(hoje.getDate()).padStart(2, '0');
+    const mes = String(hoje.getMonth() + 1).padStart(2, '0');
+    return `${hoje.getFullYear()}-${mes}-${dia}`;
+  }
+  return `${VIEW.ano}-${String(VIEW.mes).padStart(2, '0')}-01`;
+}
+
 function lancamentosDoMes(ano, mes) {
   return STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m === mes; });
 }
@@ -2080,7 +2098,7 @@ const Modals = {
       <div class="field"><label>Descrição</label><input id="ntDescricao" placeholder="Ex: Supermercado, Salário..."></div>
       <div class="field-row">
         <div class="field"><label>Valor (R$)</label><input id="ntValor" type="number" step="0.01" placeholder="0,00"></div>
-        <div class="field"><label>Data</label><input id="ntData" type="date" value="${VIEW.ano}-${String(VIEW.mes).padStart(2,'0')}-01"></div>
+        <div class="field"><label>Data</label><input id="ntData" type="date" value="${dataPadraoNovaTransacao()}"></div>
       </div>
       <div class="field-row">
         <div class="field"><label>Categoria</label><select id="ntCategoria" onchange="Modals.refreshSubcategorias(); Modals.refreshCampoCartaoFatura('nt'); Modals.refreshCampoContaInvestimento()">${catOpts}</select></div>
