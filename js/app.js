@@ -1843,6 +1843,9 @@ const Render = {
       <div class="card" style="margin-bottom:10px;">
         <div class="row"><div class="row-title">Integridade dos dados</div><div class="row-value" style="color:${integridade.divergentes.length?'var(--red)':'var(--green)'}">${integridade.ok}/${integridade.total} conferem</div></div>
       </div>
+      <div class="card" style="margin-bottom:10px;">
+        <div class="row"><div><div class="row-title">Recalcular parcelas de cartão</div><div class="row-sub">Refaz o mês de vencimento de todas as compras no cartão usando o dia de fechamento/vencimento atual de cada cartão. Use depois de corrigir o dia de fechamento/vencimento de um cartão, ou depois de importar lançamentos de cartão. Não altera valor, descrição ou categoria — só recalcula em qual fatura cada compra cai.</div></div><button class="btn ghost sm" onclick="Actions.recalcularParcelasCartao()">Recalcular</button></div>
+      </div>
       <div class="card">
         <div class="row"><div><div class="row-title" style="color:var(--danger-text);">Zerar dados</div><div class="row-sub">Apaga tudo permanentemente</div></div><button class="btn danger sm" onclick="Actions.zerarDados()">Zerar</button></div>
       </div>`;
@@ -2902,6 +2905,28 @@ const Actions = {
     Modals.close('importarLancamentos');
     Nav.show(Nav.atual);
     alert(`${qtd} lançamento(s) importado(s) com sucesso.`);
+  },
+
+  async recalcularParcelasCartao() {
+    const lancsCartao = STATE.lancamentos.filter(l => l.formaPagamento === 'Cartão de Crédito');
+    if (!lancsCartao.length) { alert('Nenhum lançamento de cartão encontrado.'); return; }
+    if (!confirm(`Isso vai recalcular em qual fatura cada uma das ${lancsCartao.length} compra(s) no cartão cai, usando o dia de fechamento/vencimento cadastrado em cada cartão hoje. Valor, descrição, categoria e conta/cartão não mudam — só o mês de vencimento das parcelas. Confirma?`)) return;
+    let parcelasRecalculadas = 0, lancsAfetados = 0;
+    for (const l of lancsCartao) {
+      const cartao = STATE.cartoes.find(c => c.id === l.carteiraId);
+      if (!cartao) continue; // lançamento órfão (cartão excluído) — não dá pra recalcular sem os dias de fechamento/vencimento
+      STATE.parcelas = STATE.parcelas.filter(p => p.lancamentoId !== l.id);
+      const geradas = AppLogic.gerarParcelas(l.valor, l.qtdParcelas || 1, l.data, cartao.diaFechamento, cartao.diaVencimento);
+      geradas.forEach(g => STATE.parcelas.push({
+        id: uuid(), lancamentoId: l.id, carteiraId: l.carteiraId, categoriaId: l.categoriaId, subcategoriaId: l.subcategoriaId,
+        valor: g.valor, numero: g.numero, qtd: g.qtd, ano: g.ano, mes: g.mes,
+      }));
+      parcelasRecalculadas += geradas.length;
+      lancsAfetados++;
+    }
+    await persist();
+    Nav.show(Nav.atual);
+    alert(`Pronto: ${parcelasRecalculadas} parcela(s) de ${lancsAfetados} compra(s) no cartão recalculadas.`);
   },
 
   async exportBackup() {
