@@ -635,6 +635,25 @@ function lancamentosDoMes(ano, mes) {
   return STATE.lancamentos.filter(l => { const [y, m] = l.data.split('-').map(Number); return y === ano && m === mes; });
 }
 
+// Lê os valores digitados no formulário aberto de "Editar orçamento" (mês VIEW.ano/mes) e devolve uma
+// linha por subcategoria orçável, com o valor atual do campo (0 se vazio). Usada tanto por
+// salvarOrcamentoMes quanto por replicarOrcamentoProximosMeses — mesma leitura do formulário nos dois
+// casos, pra não ter duas versões que podem divergir sobre "o que está preenchido agora".
+function lerFormularioOrcamento() {
+  const categoriasOrcaveis = STATE.categorias.filter(c => !Modals.CATEGORIAS_FORA_DO_ORCAMENTO.includes(c.id));
+  const linhas = [];
+  categoriasOrcaveis.forEach(cat => {
+    const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
+    const tipo = cat.id === AppLogic.CATEGORIA_GANHOS ? 'Receita' : 'Despesa';
+    subs.forEach(s => {
+      const input = document.getElementById(`orc_${cat.id}_${s.id}`);
+      if (!input) return;
+      linhas.push({ categoriaId: cat.id, subcategoriaId: s.id, valor: parseFloat(input.value) || 0, tipo });
+    });
+  });
+  return linhas;
+}
+
 // ---------------- Importação de lançamentos em lote (CSV) ----------------
 // Formato: mesmo do "Exportar Excel" (Actions.exportarCSV) — cabeçalho
 // Data;Tipo;Categoria;Subcategoria;Descricao;Valor;FormaPagamento;ContaOuCartao;Parcela.
@@ -2221,7 +2240,10 @@ const Modals = {
     document.getElementById('modalEditarOrcamentoBody').innerHTML = `
       <div class="modal-head"><h3>Editar orçamento — ${MESES_NOMES[mes]}/${ano}</h3><button class="close-x" onclick="Modals.close('editarOrcamento')">✕</button></div>
       <div class="logic-note" style="margin-bottom:12px;"><span>ℹ️</span><div>Deixe um campo em branco (ou zero) pra este mês ficar sem orçamento definido naquela subcategoria — é diferente de "orçar R$0", que aparece como estourado em qualquer gasto real.</div></div>
-      <button class="btn ghost sm" style="margin-bottom:14px;" onclick="Modals.copiarOrcamentoMesAnterior()">📋 Copiar valores do mês anterior</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+        <button class="btn ghost sm" onclick="Modals.copiarOrcamentoMesAnterior()">📋 Copiar valores do mês anterior</button>
+        <button class="btn ghost sm" onclick="Actions.replicarOrcamentoProximosMeses()">📤 Salvar e replicar para os próximos meses</button>
+      </div>
       ${categoriasOrcaveis.map(cat => {
         const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
         if (!subs.length) return '';
@@ -2647,27 +2669,63 @@ const Actions = {
   },
   async salvarOrcamentoMes() {
     const { ano, mes } = VIEW;
-    const categoriasOrcaveis = STATE.categorias.filter(c => !Modals.CATEGORIAS_FORA_DO_ORCAMENTO.includes(c.id));
-    categoriasOrcaveis.forEach(cat => {
-      const subs = STATE.subcategorias.filter(s => s.categoriaId === cat.id && s.ativa !== false);
-      const tipo = cat.id === AppLogic.CATEGORIA_GANHOS ? 'Receita' : 'Despesa';
-      subs.forEach(s => {
-        const input = document.getElementById(`orc_${cat.id}_${s.id}`);
-        if (!input) return;
-        const valor = parseFloat(input.value) || 0;
-        const existente = STATE.orcamentos.find(o => o.ano === ano && o.mes === mes && o.categoriaId === cat.id && o.subcategoriaId === s.id);
-        if (valor > 0) {
-          if (existente) existente.valorOrcado = valor;
-          else STATE.orcamentos.push({ ano, mes, categoriaId: cat.id, subcategoriaId: s.id, valorOrcado: valor, tipo });
-        } else if (existente) {
-          // Campo deixado em branco/zero num mês que já tinha orçamento — remove a linha, em vez de
-          // gravar valorOrcado:0, pra não virar um falso "estourado" em qualquer gasto real (ver nota
-          // no modal e em calcularOrcadoRealizado).
-          STATE.orcamentos.splice(STATE.orcamentos.indexOf(existente), 1);
-        }
-      });
+    lerFormularioOrcamento().forEach(({ categoriaId, subcategoriaId, valor, tipo }) => {
+      const existente = STATE.orcamentos.find(o => o.ano === ano && o.mes === mes && o.categoriaId === categoriaId && o.subcategoriaId === subcategoriaId);
+      if (valor > 0) {
+        if (existente) existente.valorOrcado = valor;
+        else STATE.orcamentos.push({ ano, mes, categoriaId, subcategoriaId, valorOrcado: valor, tipo });
+      } else if (existente) {
+        // Campo deixado em branco/zero num mês que já tinha orçamento — remove a linha, em vez de
+        // gravar valorOrcado:0, pra não virar um falso "estourado" em qualquer gasto real (ver nota
+        // no modal e em calcularOrcadoRealizado).
+        STATE.orcamentos.splice(STATE.orcamentos.indexOf(existente), 1);
+      }
     });
     await persist(); Modals.close('editarOrcamento'); Nav.show('orcamentos');
+  },
+
+  // Salva o mês aberto (mesma regra do botão Salvar) e, além disso, copia essas mesmas linhas pros
+  // próximos N meses — só onde a subcategoria AINDA NÃO tem valor definido naquele mês futuro, pra
+  // nunca sobrescrever uma customização que já exista lá (ex.: orçamento de Natal em dezembro).
+  async replicarOrcamentoProximosMeses() {
+    const qtdStr = prompt('Replicar o orçamento deste mês para quantos meses à frente?', '12');
+    if (qtdStr === null) return;
+    const qtd = parseInt(qtdStr, 10);
+    if (!qtd || qtd < 1 || qtd > 36) { alert('Digite um número de meses entre 1 e 36.'); return; }
+    if (!confirm(`Isso salva o orçamento deste mês e copia pros próximos ${qtd} mês(es) — só nas subcategorias que ainda estão sem valor definido lá (nada que já tem valor é sobrescrito). Continuar?`)) return;
+
+    const { ano, mes } = VIEW;
+    const linhasFormulario = lerFormularioOrcamento();
+
+    // 1) salva o mês aberto — mesma lógica de salvarOrcamentoMes
+    linhasFormulario.forEach(({ categoriaId, subcategoriaId, valor, tipo }) => {
+      const existente = STATE.orcamentos.find(o => o.ano === ano && o.mes === mes && o.categoriaId === categoriaId && o.subcategoriaId === subcategoriaId);
+      if (valor > 0) {
+        if (existente) existente.valorOrcado = valor;
+        else STATE.orcamentos.push({ ano, mes, categoriaId, subcategoriaId, valorOrcado: valor, tipo });
+      } else if (existente) {
+        STATE.orcamentos.splice(STATE.orcamentos.indexOf(existente), 1);
+      }
+    });
+
+    // 2) replica pros próximos meses (só as linhas com valor > 0 fazem sentido replicar)
+    let preenchidos = 0, pulados = 0;
+    const comValor = linhasFormulario.filter(l => l.valor > 0);
+    for (let i = 1; i <= qtd; i++) {
+      let m = mes + i, a = ano;
+      while (m > 12) { m -= 12; a += 1; }
+      comValor.forEach(({ categoriaId, subcategoriaId, valor, tipo }) => {
+        const existente = STATE.orcamentos.find(o => o.ano === a && o.mes === m && o.categoriaId === categoriaId && o.subcategoriaId === subcategoriaId);
+        if (existente) { pulados++; return; }
+        STATE.orcamentos.push({ ano: a, mes: m, categoriaId, subcategoriaId, valorOrcado: valor, tipo });
+        preenchidos++;
+      });
+    }
+
+    await persist();
+    Modals.close('editarOrcamento');
+    Nav.show('orcamentos');
+    alert(`Orçamento de ${MESES_NOMES[mes]}/${ano} salvo. Replicado para os próximos ${qtd} mês(es): ${preenchidos} linha(s) preenchida(s), ${pulados} pulada(s) por já terem valor definido lá.`);
   },
   async toggleContaAtiva(id) {
     const c = STATE.contas.find(c => c.id === id);
