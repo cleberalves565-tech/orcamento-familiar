@@ -588,6 +588,36 @@ const Auth = {
 };
 
 // ---------------- Navegação ----------------
+// Aportes em investimento criados ANTES de parLancamentoId existir (20260927) não têm o vínculo
+// estrutural entre as duas pernas (despesa de origem + receita espelho) — só "se parecem" por
+// data/valor/descrição. Roda uma vez por vault (guardado em STATE._parLinkMigrado) e casa esses pares
+// pelo mesmo padrão exato que criarLancamentoCompleto usa pra montar a descrição da perna espelho.
+// Não force-casa nada que não bata 100% — um par que não for encontrado simplesmente fica sem vínculo,
+// exatamente como já estava (nenhum dado é alterado, só a metadado de vínculo é preenchido).
+function migrarVinculosAporteInvestimento() {
+  if (!STATE || STATE._parLinkMigrado) return false;
+  let mudou = false;
+  const usados = new Set();
+  STATE.lancamentos.forEach(l => {
+    if (l.tipo !== 'Despesa' || l.categoriaId !== AppLogic.CATEGORIA_INVESTIMENTO_APORTE || l.parLancamentoId) return;
+    const par = STATE.lancamentos.find(r => {
+      if (usados.has(r.id) || r.id === l.id || r.parLancamentoId) return false;
+      if (r.tipo !== 'Receita' || r.categoriaId !== l.categoriaId || r.subcategoriaId !== l.subcategoriaId) return false;
+      if (r.data !== l.data || Math.abs(r.valor - l.valor) >= 0.005) return false;
+      const contaDestino = STATE.contas.find(c => c.id === r.carteiraId);
+      return contaDestino && r.descricao === l.descricao + ' (entrada na conta ' + contaDestino.nome + ')';
+    });
+    if (par) {
+      l.parLancamentoId = par.id;
+      par.parLancamentoId = l.id;
+      usados.add(par.id);
+      mudou = true;
+    }
+  });
+  STATE._parLinkMigrado = true;
+  return mudou;
+}
+
 const Nav = {
   atual: 'dashboard',
   show(id) {
@@ -595,6 +625,7 @@ const Nav = {
     // Contas antigas (sincronizadas antes da tela de Alertas existir) não têm esse campo no vault —
     // sem isso, render_alertas quebraria na primeira visita. Mesmo padrão defensivo usado em Metas.
     if (STATE && !STATE.alertasDecisoes) STATE.alertasDecisoes = [];
+    if (STATE && !STATE._parLinkMigrado && migrarVinculosAporteInvestimento()) persist();
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById('screen-' + id).classList.add('active');
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -724,7 +755,7 @@ function parseCSVImportacao(texto) {
 }
 function validarLinhaImportacao(campos, numeroLinha) {
   const erros = [];
-  const [dataRaw, tipoRaw, categoriaRaw, subcategoriaRaw, descricaoRaw, valorRaw, formaPagamentoRaw, contaRaw, parcelaRaw] =
+  const [dataRaw, tipoRaw, categoriaRaw, subcategoriaRaw, descricaoRaw, valorRaw, formaPagamentoRaw, contaRaw, parcelaRaw, contaInvestimentoRaw] =
     campos.map(c => (c == null ? '' : String(c)).trim());
   const descricao = descricaoRaw;
 
@@ -785,6 +816,28 @@ function validarLinhaImportacao(campos, numeroLinha) {
     if (!qtdParcelas || qtdParcelas < 1 || qtdParcelas > MAX_PARCELAS) erros.push(`Parcelas deve ser um número entre 1 e ${MAX_PARCELAS}`);
   }
 
+  // Aporte em investimento (Despesa saindo de uma conta comum): com 2+ contas tipo Investimento no
+  // vault, não dá pra adivinhar qual delas recebe o dinheiro — diferente da tela "Nova transação"
+  // (que tem um campo pra escolher), o CSV precisa dizer explicitamente pela coluna ContaInvestimento.
+  // Com só 1 conta de investimento, não tem ambiguidade e nem precisa preencher a coluna (mesmo
+  // comportamento de antes). Nunca "chuta" a primeira conta encontrada quando há mais de uma.
+  let contaInvestimentoId = null;
+  if (categoria && categoria.id === AppLogic.CATEGORIA_INVESTIMENTO_APORTE && tipo === 'Despesa') {
+    const contasInvestimento = STATE.contas.filter(c => c.tipo === 'Investimento' && c.ativa !== false);
+    if (contasInvestimento.length > 1) {
+      if (!contaInvestimentoRaw) {
+        erros.push(`Há mais de uma conta de investimento (${contasInvestimento.map(c => c.nome).join(', ')}) — preencha a coluna ContaInvestimento com o nome exato de uma delas`);
+      } else {
+        const alvo = normalizarNomeImportacao(contaInvestimentoRaw);
+        const achada = contasInvestimento.find(c => normalizarNomeImportacao(c.nome) === alvo);
+        if (!achada) erros.push(`Conta de investimento "${contaInvestimentoRaw}" não encontrada entre as contas tipo Investimento (${contasInvestimento.map(c => c.nome).join(', ')})`);
+        else contaInvestimentoId = achada.id;
+      }
+    } else if (contasInvestimento.length === 1) {
+      contaInvestimentoId = contasInvestimento[0].id;
+    }
+  }
+
   let duplicataProvavel = false;
   if (data && valor && descricao && destino) {
     duplicataProvavel = STATE.lancamentos.some(l => l.data === data && Math.abs(l.valor - valor) < 0.005
@@ -795,7 +848,7 @@ function validarLinhaImportacao(campos, numeroLinha) {
     numeroLinha, camposOriginais: campos, erros, ok: erros.length === 0, duplicataProvavel,
     resolvido: erros.length === 0 ? {
       data, tipo, categoriaId: categoria.id, subcategoriaId: subcategoria.id, descricao, valor,
-      carteiraId: destino.obj.id, isCartao: destino.isCartao, qtdParcelas, formaPagamento,
+      carteiraId: destino.obj.id, isCartao: destino.isCartao, qtdParcelas, formaPagamento, contaInvestimentoId,
       categoriaNomeResolvido: categoria.nome, subcategoriaNomeResolvido: subcategoria.nome, contaNomeResolvida: destino.obj.nome,
     } : null,
   };
@@ -2303,7 +2356,7 @@ const Modals = {
     IMPORT_PREVIEW = null;
     document.getElementById('modalImportarLancamentosBody').innerHTML = `
       <div class="modal-head"><h3>Importar lançamentos (CSV)</h3><button class="close-x" onclick="Modals.close('importarLancamentos')">✕</button></div>
-      <div class="logic-note"><span>ℹ️</span><div>Mesmo formato do botão <b>Exportar Excel</b>: colunas <b>Data;Tipo;Categoria;Subcategoria;Descricao;Valor;FormaPagamento;ContaOuCartao;Parcela</b>, separadas por ponto e vírgula. Categoria, Subcategoria e Conta/Cartão precisam já existir no app com o mesmo nome (não precisa digitar o emoji). "Pagamento de Fatura" não é suportado — lance essas manualmente. Nada é gravado até você conferir a prévia e confirmar.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Mesmo formato do botão <b>Exportar Excel</b>: colunas <b>Data;Tipo;Categoria;Subcategoria;Descricao;Valor;FormaPagamento;ContaOuCartao;Parcela;ContaInvestimento</b>, separadas por ponto e vírgula. Categoria, Subcategoria e Conta/Cartão precisam já existir no app com o mesmo nome (não precisa digitar o emoji). "Pagamento de Fatura" não é suportado — lance essas manualmente. A coluna <b>ContaInvestimento</b> só é obrigatória em linhas de aporte (Despesa &gt; Investimento) quando o vault tem mais de uma conta do tipo Investimento — diz pra qual conta o dinheiro vai; com uma só conta de investimento, pode deixar em branco. Nada é gravado até você conferir a prévia e confirmar.</div></div>
       <div style="margin-bottom:14px;"><button class="btn ghost sm" onclick="Actions.baixarModeloImportacao()">⬇️ Baixar modelo CSV</button></div>
       <div class="field"><label>Selecione o arquivo CSV</label><input type="file" accept=".csv,text/csv" onchange="Actions.processarArquivoImportacao(this.files[0])"></div>
       <div id="importPreviewArea"></div>`;
@@ -2324,12 +2377,15 @@ const Modals = {
       </div>
       <div style="max-height:360px; overflow:auto; margin:10px 0;">
       <table class="table" style="font-size:12px;">
-        <tr><th></th><th>Linha</th><th>Data</th><th>Tipo</th><th>Categoria</th><th>Subcategoria</th><th>Descrição</th><th>Valor</th><th>Conta/Cartão</th><th>Situação</th></tr>
+        <tr><th></th><th>Linha</th><th>Data</th><th>Tipo</th><th>Categoria</th><th>Subcategoria</th><th>Descrição</th><th>Valor</th><th>Conta/Cartão</th><th>Investir em</th><th>Situação</th></tr>
         ${IMPORT_PREVIEW.map((r, idx) => {
           const d = r.resolvido;
           const situacao = !r.ok ? `<span style="color:#d33;">${r.erros.join('; ')}</span>`
             : r.duplicataProvavel ? '<span style="color:#b8860b;">Possível duplicata já existente</span>'
             : '<span style="color:#2a8;">OK</span>';
+          const contaInvestimentoNome = d && d.contaInvestimentoId
+            ? (STATE.contas.find(c => c.id === d.contaInvestimentoId) || {}).nome || ''
+            : '';
           return `<tr>
             <td>${r.ok ? `<input type="checkbox" ${r.selecionada ? 'checked' : ''} onchange="Modals.toggleLinhaImportacao(${idx}, this.checked)">` : ''}</td>
             <td>${r.numeroLinha}</td>
@@ -2340,6 +2396,7 @@ const Modals = {
             <td>${r.camposOriginais[4] || ''}</td>
             <td>${d ? fmtMoeda(d.valor) : (r.camposOriginais[5] || '')}</td>
             <td>${d ? d.contaNomeResolvida : (r.camposOriginais[7] || '')}</td>
+            <td>${contaInvestimentoNome}</td>
             <td>${situacao}</td>
           </tr>`;
         }).join('')}
@@ -2499,6 +2556,7 @@ function criarLancamentoCompleto({ data, tipo, categoriaId, subcategoriaId, desc
     id: uuid(), data, tipo, categoriaId, subcategoriaId, descricao, valor,
     formaPagamento: formaPagamentoFinal, carteiraId,
     qtdParcelas, parcelaAtual: 1, cartaoFaturaId: cartaoFaturaId || null,
+    parLancamentoId: null, // ver bloco abaixo — vínculo estrutural com a 2ª perna de aporte em investimento, quando existir
   };
   STATE.lancamentos.push(lanc);
   const criados = [lanc];
@@ -2524,7 +2582,9 @@ function criarLancamentoCompleto({ data, tipo, categoriaId, subcategoriaId, desc
         descricao: descricao + ' (entrada na conta ' + contaInvestimento.nome + ')', valor,
         formaPagamento: 'Transferência', carteiraId: contaInvestimento.id,
         qtdParcelas: 1, parcelaAtual: 1, cartaoFaturaId: null,
+        parLancamentoId: lanc.id,
       };
+      lanc.parLancamentoId = perna2.id; // vínculo nos dois sentidos — ver salvarEdicaoTransacao/excluirTransacao
       STATE.lancamentos.push(perna2);
       criados.push(perna2);
     }
@@ -2592,6 +2652,11 @@ const Actions = {
     // Remove as parcelas antigas deste lançamento — se for cartão, são recriadas do zero abaixo.
     STATE.parcelas = STATE.parcelas.filter(p => p.lancamentoId !== id);
 
+    // Guarda como estava ANTES da edição — precisa saber se já era a "perna de origem" (Despesa) de um
+    // aporte em investimento pra decidir, depois do Object.assign, se ainda faz sentido sincronizar.
+    const tipoAntes = l.tipo;
+    const parVinculado = l.parLancamentoId ? STATE.lancamentos.find(x => x.id === l.parLancamentoId) : null;
+
     const contaSelecionadaEd = !isCartao ? STATE.contas.find(c => c.id === carteiraId) : null;
     const formaPagamentoEd = isCartao ? 'Cartão de Crédito'
       : (contaSelecionadaEd && contaSelecionadaEd.tipo === 'Conta Bancária') ? document.getElementById('etFormaPagamento').value
@@ -2610,6 +2675,27 @@ const Actions = {
         valor: g.valor, numero: g.numero, qtd: g.qtd, ano: g.ano, mes: g.mes,
       }));
     }
+
+    // Sincroniza a 2ª perna automática de investimento (criarLancamentoCompleto), se esta transação
+    // for a "perna de origem" (a Despesa) de um aporte vinculado. Só propaga quando, depois da edição,
+    // ela CONTINUA sendo um aporte em investimento — se a categoria mudou pra outra coisa, o vínculo é
+    // desfeito em vez de arriscar sincronizar dado errado, e a pessoa é avisada pra revisar a perna
+    // espelho manualmente (ela não é apagada nem alterada sozinha).
+    if (parVinculado) {
+      const continuaAporte = tipoAntes === 'Despesa' && tipo === 'Despesa' && categoriaId === AppLogic.CATEGORIA_INVESTIMENTO_APORTE;
+      if (continuaAporte) {
+        const contaDestino = STATE.contas.find(c => c.id === parVinculado.carteiraId);
+        Object.assign(parVinculado, {
+          data, valor, categoriaId, subcategoriaId,
+          descricao: descricao + ' (entrada na conta ' + (contaDestino ? contaDestino.nome : '?') + ')',
+        });
+      } else if (tipoAntes === 'Despesa') {
+        parVinculado.parLancamentoId = null;
+        l.parLancamentoId = null;
+        alert(`Esta transação deixou de ser um aporte em investimento (mudou categoria/tipo). O lançamento espelho "${parVinculado.descricao}" (${fmtMoeda(parVinculado.valor)}) NÃO foi alterado nem apagado automaticamente — revise-o manualmente em Transações.`);
+      }
+    }
+
     await persist();
     Modals.close('editarTransacao');
     Nav.show(Nav.atual);
@@ -2617,9 +2703,16 @@ const Actions = {
   async excluirTransacao(id) {
     const l = STATE.lancamentos.find(x => x.id === id);
     if (!l) return;
-    if (!confirm(`Excluir a transação "${l.descricao}" (${fmtMoeda(l.valor)}, ${fmtData(l.data)})?\n\nEsta ação não pode ser desfeita.`)) return;
-    STATE.lancamentos = STATE.lancamentos.filter(x => x.id !== id);
-    STATE.parcelas = STATE.parcelas.filter(p => p.lancamentoId !== id);
+    // Se esta transação for uma das duas pernas de um aporte em investimento (ver criarLancamentoCompleto),
+    // as duas são excluídas juntas — nunca deixa uma perna solta sem a outra.
+    const par = l.parLancamentoId ? STATE.lancamentos.find(x => x.id === l.parLancamentoId) : null;
+    const msg = par
+      ? `Excluir a transação "${l.descricao}" (${fmtMoeda(l.valor)}, ${fmtData(l.data)})?\n\nEla está vinculada ao lançamento espelho "${par.descricao}" (${fmtMoeda(par.valor)}) — as DUAS serão excluídas juntas, para não deixar uma perna solta.\n\nEsta ação não pode ser desfeita.`
+      : `Excluir a transação "${l.descricao}" (${fmtMoeda(l.valor)}, ${fmtData(l.data)})?\n\nEsta ação não pode ser desfeita.`;
+    if (!confirm(msg)) return;
+    const idsExcluir = par ? [l.id, par.id] : [l.id];
+    STATE.lancamentos = STATE.lancamentos.filter(x => !idsExcluir.includes(x.id));
+    STATE.parcelas = STATE.parcelas.filter(p => !idsExcluir.includes(p.lancamentoId));
     await persist();
     Modals.close('editarTransacao');
     Nav.show(Nav.atual);
@@ -2932,10 +3025,10 @@ const Actions = {
 
   baixarModeloImportacao() {
     const contaEx = (STATE.contas.find(c => Modals.contaSelecionavel(c)) || {}).nome || 'Conta Corrente';
-    const cab = ['Data', 'Tipo', 'Categoria', 'Subcategoria', 'Descricao', 'Valor', 'FormaPagamento', 'ContaOuCartao', 'Parcela'];
+    const cab = ['Data', 'Tipo', 'Categoria', 'Subcategoria', 'Descricao', 'Valor', 'FormaPagamento', 'ContaOuCartao', 'Parcela', 'ContaInvestimento'];
     const linhas = [
-      ['2026-01-05', 'Despesa', 'Gastos Fixos', 'Aluguel', 'Aluguel de janeiro', '1500,00', 'Débito', contaEx, ''],
-      ['2026-01-07', 'Receita', 'Ganhos', 'Salário', 'Salário de janeiro', '5000,00', 'Pix', contaEx, ''],
+      ['2026-01-05', 'Despesa', 'Gastos Fixos', 'Aluguel', 'Aluguel de janeiro', '1500,00', 'Débito', contaEx, '', ''],
+      ['2026-01-07', 'Receita', 'Ganhos', 'Salário', 'Salário de janeiro', '5000,00', 'Pix', contaEx, '', ''],
     ];
     const csv = '﻿' + cab.join(';') + '\r\n' + linhas.map(l => l.join(';')).join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -2972,7 +3065,7 @@ const Actions = {
       criarLancamentoCompleto({
         data: d.data, tipo: d.tipo, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
         descricao: d.descricao, valor: d.valor, carteiraId: d.carteiraId, isCartao: d.isCartao,
-        qtdParcelas: d.qtdParcelas, cartaoFaturaId: null, contaInvestimentoId: null, formaPagamento: d.formaPagamento,
+        qtdParcelas: d.qtdParcelas, cartaoFaturaId: null, contaInvestimentoId: d.contaInvestimentoId || null, formaPagamento: d.formaPagamento,
       });
     }
     await persist();
