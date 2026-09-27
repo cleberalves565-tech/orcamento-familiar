@@ -1245,20 +1245,43 @@ const Render = {
       <div class="fab"><button class="fab-btn" onclick="Modals.openNovaTransacao()">+ Nova transação</button></div>`;
   },
 
+  transacoesFiltroConta: '',
+  transacoesFiltroCategoria: '',
+  transacoesFiltroTipo: '',
+  setTransacoesFiltro(campo, valor) { this['transacoesFiltro' + campo] = valor; this.render_transacoes(); },
+  limparTransacoesFiltro() { this.transacoesFiltroConta = ''; this.transacoesFiltroCategoria = ''; this.transacoesFiltroTipo = ''; this.render_transacoes(); },
   render_transacoes() {
     const el = document.getElementById('screen-transacoes');
     const { ano, mes } = VIEW;
     const lista = itensDoMes(ano, mes).sort((a, b) => b.data.localeCompare(a.data));
     const receitas = totalReceitasMes(ano, mes), despesas = totalDespesasMes(ano, mes);
+    const optionsConta = STATE.contas.map(c => `<option value="${c.id}" ${String(this.transacoesFiltroConta)===String(c.id)?'selected':''}>${c.nome}${c.ativa===false?' (desativada)':''}</option>`).join('')
+      + STATE.cartoes.map(c => `<option value="${c.id}" ${String(this.transacoesFiltroConta)===String(c.id)?'selected':''}>💳 ${c.nome}</option>`).join('');
+    const optionsCategoria = STATE.categorias.map(c => `<option value="${c.id}" ${String(this.transacoesFiltroCategoria)===String(c.id)?'selected':''}>${c.nome}</option>`).join('');
+    const filtrosAtivos = this.transacoesFiltroConta || this.transacoesFiltroCategoria || this.transacoesFiltroTipo;
     el.innerHTML = `
       <div class="topbar"><h1>Transações</h1>${mesNavHtml()}</div>
-      <div class="field-row" style="margin-bottom:16px;">
+      <div class="field-row" style="margin-bottom:10px;">
         <div class="field"><input id="buscaTransacao" placeholder="Buscar por descrição..." oninput="Render.render_transacoes()"></div>
+      </div>
+      <div class="field-row" style="margin-bottom:16px; flex-wrap:wrap;">
+        <div class="field"><label>Conta/cartão</label><select onchange="Render.setTransacoesFiltro('Conta', this.value)"><option value="">Todas</option>${optionsConta}</select></div>
+        <div class="field"><label>Categoria</label><select onchange="Render.setTransacoesFiltro('Categoria', this.value)"><option value="">Todas</option>${optionsCategoria}</select></div>
+        <div class="field"><label>Tipo</label><select onchange="Render.setTransacoesFiltro('Tipo', this.value)">
+          <option value="">Ambos</option>
+          <option value="Receita" ${this.transacoesFiltroTipo==='Receita'?'selected':''}>Receita</option>
+          <option value="Despesa" ${this.transacoesFiltroTipo==='Despesa'?'selected':''}>Despesa</option>
+        </select></div>
+        ${filtrosAtivos ? '<div class="field" style="justify-content:flex-end;"><label>&nbsp;</label><button class="btn ghost sm" onclick="Render.limparTransacoesFiltro()">Limpar filtros</button></div>' : ''}
       </div>
       <div class="logic-note"><span>✏️</span><div>Clique em um lançamento na lista abaixo para corrigir ou excluir (útil quando duplicar por engano). Compras no cartão aparecem pelo mês em que cada <b>parcela vence</b>, já com o valor daquela parcela — não o valor total da compra.</div></div>
       <div class="card">${lista.filter(l => {
         const termo = (document.getElementById('buscaTransacao') && document.getElementById('buscaTransacao').value || '').toLowerCase();
-        return !termo || l.descricao.toLowerCase().includes(termo);
+        if (termo && !l.descricao.toLowerCase().includes(termo)) return false;
+        if (this.transacoesFiltroConta && String(l.carteiraId) !== String(this.transacoesFiltroConta)) return false;
+        if (this.transacoesFiltroCategoria && String(l.categoriaId) !== String(this.transacoesFiltroCategoria)) return false;
+        if (this.transacoesFiltroTipo && l.tipo !== this.transacoesFiltroTipo) return false;
+        return true;
       }).map(l => {
         const transferencia = l.transferencia;
         return `<div class="row" style="cursor:pointer;" onclick="Modals.openEditarTransacao('${l.lancamentoId}')"><div class="row-left"><div class="row-icon">${CATEGORIA_ICONS[l.categoriaId] || ''}</div><div><div class="row-title">${l.descricao}${l.isParcela && l.qtd > 1 ? ' (parcela ' + l.numero + '/' + l.qtd + ')' : ''}</div><div class="row-sub">${fmtData(l.dataCompra || l.data)}${l.isParcela ? ' (compra)' : ''} · ${transferencia ? 'Transferência (não é despesa nova)' : categoriaNome(l.categoriaId) + ' · ' + contaOuCartaoNome(l.carteiraId)}</div></div></div>
@@ -1288,7 +1311,7 @@ const Render = {
       // conta nova nasce SEM contar (liquidaReserva ausente/false) — é mais seguro subestimar a reserva
       // até você confirmar que aquele dinheiro é líquido de verdade do que inflar por padrão.
       const liquidaLinha = (c.tipo === 'Investimento' && !inativa) ? `<div class="stat-sub" style="margin-top:4px; display:flex; justify-content:space-between; align-items:center;">🛟 Conta pra reserva de emergência: <b>${c.liquidaReserva ? 'sim' : 'não'}</b><span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaLiquidaReserva(${c.id})">alternar</span></div>` : '';
-      return `<div class="card" style="${inativa ? 'opacity:.5;' : ''}"><div class="stat-label">${c.nome}${inativa ? ' (desativada)' : ''}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub" style="display:flex; justify-content:space-between; align-items:center;">${c.tipo}<span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaAtiva(${c.id})">${inativa ? 'reativar' : 'desativar'}</span></div>${liquidaLinha}</div>`;
+      return `<div class="card" style="${inativa ? 'opacity:.5;' : ''}"><div class="stat-label">${c.nome}${inativa ? ' (desativada)' : ''}</div><div class="stat-value ${saldo<0?'down':''}">${fmtMoeda(saldo)}</div><div class="stat-sub" style="display:flex; justify-content:space-between; align-items:center;">${c.tipo}<span><span style="cursor:pointer; text-decoration:underline;" onclick="Modals.openEditarConta(${c.id})">editar</span> · <span style="cursor:pointer; text-decoration:underline;" onclick="Actions.toggleContaAtiva(${c.id})">${inativa ? 'reativar' : 'desativar'}</span></span></div>${liquidaLinha}</div>`;
     }
     el.innerHTML = `
       <div class="topbar"><h1>Contas</h1><button class="btn" onclick="Modals.openNovaConta()">+ Nova conta</button></div>
@@ -1932,6 +1955,18 @@ const Render = {
       </div>
       <div class="card" style="margin-bottom:10px;">
         <div class="row"><div class="row-title">Integridade dos dados</div><div class="row-value" style="color:${integridade.divergentes.length?'var(--red)':'var(--green)'}">${integridade.ok}/${integridade.total} conferem</div></div>
+        ${integridade.divergentes.length ? `
+        <div class="stat-sub" style="margin-top:6px; cursor:pointer; text-decoration:underline;" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none' ? 'block' : 'none';">Ver ${integridade.divergentes.length} lançamento(s) divergente(s)</div>
+        <div style="display:none; margin-top:8px;">
+          <table class="table" style="font-size:12px;">
+            <tr><th>Descrição</th><th>Valor do lançamento</th><th>Soma das parcelas</th><th>Diferença</th></tr>
+            ${integridade.divergentes.map(d => `<tr>
+              <td>${d.descricao}</td><td>${fmtMoeda(d.valor)}</td><td>${fmtMoeda(d.somaParcelas)}</td>
+              <td style="color:var(--red);">${fmtMoeda(d.somaParcelas - d.valor)}</td>
+            </tr>`).join('')}
+          </table>
+          <div class="stat-sub" style="margin-top:6px;">Geralmente resolve rodando "Recalcular parcelas de cartão" abaixo. Se persistir, o lançamento pode ter sido editado de um jeito que não recriou as parcelas corretamente.</div>
+        </div>` : ''}
       </div>
       <div class="card" style="margin-bottom:10px;">
         <div class="row"><div><div class="row-title">Recalcular parcelas de cartão</div><div class="row-sub">Refaz o mês de vencimento de todas as compras no cartão usando o dia de fechamento/vencimento atual de cada cartão. Use depois de corrigir o dia de fechamento/vencimento de um cartão, ou depois de importar lançamentos de cartão. Não altera valor, descrição ou categoria — só recalcula em qual fatura cada compra cai.</div></div><button class="btn ghost sm" onclick="Actions.recalcularParcelasCartao()">Recalcular</button></div>
@@ -2256,6 +2291,27 @@ const Modals = {
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarConta()">Adicionar conta</button>`;
     Modals.open('novaConta');
   },
+  // Editar uma conta já existente (nome/tipo/saldo inicial/reserva de emergência) sem precisar recriar
+  // e mover lançamento por lançamento — foi exatamente esse workaround manual que precisou ser feito
+  // quando uma conta (PicPay) nasceu com o tipo errado, e essa função existe pra nunca mais precisar.
+  openEditarConta(id) {
+    const c = STATE.contas.find(x => x.id === id);
+    if (!c) return;
+    document.getElementById('modalEditarContaBody').innerHTML = `
+      <div class="modal-head"><h3>Editar conta</h3><button class="close-x" onclick="Modals.close('editarConta')">✕</button></div>
+      <div class="field"><label>Nome da conta</label><input id="ecNome" value="${c.nome}"></div>
+      <div class="field"><label>Tipo</label><select id="ecTipo" onchange="document.getElementById('ecLiquidaWrap').style.display = this.value==='Investimento' ? 'block' : 'none';">
+        <option ${c.tipo==='Conta Bancária'?'selected':''}>Conta Bancária</option>
+        <option ${c.tipo==='Investimento'?'selected':''}>Investimento</option>
+      </select></div>
+      <div class="logic-note"><span>ℹ️</span><div>Mudar o tipo só reclassifica a conta (ex.: Saldo disponível x Patrimônio investido no Painel geral) — os lançamentos e o histórico não são alterados.</div></div>
+      <div class="field"><label>Saldo inicial (R$)</label><input id="ecSaldo" type="number" step="0.01" value="${c.saldoInicial || 0}"></div>
+      <div class="field" id="ecLiquidaWrap" style="display:${c.tipo==='Investimento' ? 'block' : 'none'};">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:400;"><input type="checkbox" id="ecLiquidaReserva" style="width:auto;" ${c.liquidaReserva ? 'checked' : ''}> Conta pra reserva de emergência?</label>
+      </div>
+      <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarEdicaoConta(${c.id})">Salvar alterações</button>`;
+    Modals.open('editarConta');
+  },
   openNovoCartao() {
     document.getElementById('modalNovoCartaoBody').innerHTML = `
       <div class="modal-head"><h3>Novo cartão</h3><button class="close-x" onclick="Modals.close('novoCartao')">✕</button></div>
@@ -2277,18 +2333,6 @@ const Modals = {
       <div class="logic-note"><span>ℹ️</span><div>Não existe campo de "valor já guardado" — ao criar, esta meta ganha sua própria subcategoria em 🎯Metas. O valor guardado é calculado sozinho a partir dos lançamentos que você fizer nela (veja o exemplo na tela de Metas).</div></div>
       <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarMeta()">Criar meta</button>`;
     Modals.open('novaMeta');
-  },
-  openNovoAtivo() {
-    document.getElementById('modalNovoAtivoBody').innerHTML = `
-      <div class="modal-head"><h3>Novo ativo</h3><button class="close-x" onclick="Modals.close('novoAtivo')">✕</button></div>
-      <div class="field"><label>Nome</label><input id="naNome" placeholder="Ex: CDB Banco X"></div>
-      <div class="field"><label>Tipo</label><select id="naTipo"><option>Renda Fixa</option><option>CDB</option><option>Consórcio</option><option>Ações</option><option>Outro</option></select></div>
-      <div class="field-row">
-        <div class="field"><label>Valor aportado (R$)</label><input id="naAportado" type="number" step="0.01"></div>
-        <div class="field"><label>Valor atual (R$)</label><input id="naAtual" type="number" step="0.01"></div>
-      </div>
-      <button class="btn" style="width:100%; margin-top:10px;" onclick="Actions.salvarAtivo()">Adicionar</button>`;
-    Modals.open('novoAtivo');
   },
   // Categorias que não fazem sentido num orçamento planejado: Pagamento de Fatura (é a mesma compra
   // já contada na parcela, entraria em dobro) e Ajuste de Saldo (correção pontual de reconciliação,
@@ -2732,6 +2776,21 @@ const Actions = {
     });
     await persist(); Modals.close('novaConta'); Nav.show('contas');
   },
+  async salvarEdicaoConta(id) {
+    const c = STATE.contas.find(x => x.id === id);
+    if (!c) return;
+    const nome = document.getElementById('ecNome').value.trim();
+    if (!nome) { alert('Preencha o nome da conta.'); return; }
+    const tipoNovo = document.getElementById('ecTipo').value;
+    const liquidaEl = document.getElementById('ecLiquidaReserva');
+    if (tipoNovo !== c.tipo && !confirm(`Mudar o tipo de "${c.nome}" de "${c.tipo}" para "${tipoNovo}"?\n\nIsso muda como ela é somada no Painel geral (Saldo disponível x Patrimônio investido) e em Alertas Financeiros. O histórico de lançamentos não muda.`)) return;
+    Object.assign(c, {
+      nome, tipo: tipoNovo,
+      saldoInicial: parseFloat(document.getElementById('ecSaldo').value) || 0,
+      liquidaReserva: tipoNovo === 'Investimento' ? !!(liquidaEl && liquidaEl.checked) : false,
+    });
+    await persist(); Modals.close('editarConta'); Nav.show('contas');
+  },
   async salvarCartao() {
     const nome = document.getElementById('ncartNome').value.trim();
     if (!nome) return;
@@ -2761,14 +2820,6 @@ const Actions = {
       subcategoriaId,
       prazo: document.getElementById('nmPrazo').value });
     await persist(); Modals.close('novaMeta'); Nav.show('metas');
-  },
-  async salvarAtivo() {
-    const nome = document.getElementById('naNome').value.trim();
-    if (!nome) return;
-    STATE.investimentos.push({ id: uuid(), nome, tipo: document.getElementById('naTipo').value,
-      valorAportado: parseFloat(document.getElementById('naAportado').value) || 0,
-      valorAtual: parseFloat(document.getElementById('naAtual').value) || 0 });
-    await persist(); Modals.close('novoAtivo'); Nav.show('investimentos');
   },
   async salvarSubcategoria() {
     const nome = document.getElementById('nsNome').value.trim();
