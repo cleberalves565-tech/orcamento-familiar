@@ -1004,14 +1004,30 @@ function forecastMes(ano, mes) {
   candidatosCorte.sort((a, b) => b.orcado - a.orcado);
   return { despesa: AppLogic.reais(despesaCents), receita: AppLogic.reais(receitaCents), candidatosCorte };
 }
-// Todos os meses (ano/mês) posteriores ao mês atual que já têm ao menos um orçamento cadastrado —
-// o forecast só cobre o que a própria pessoa já planejou, nunca inventa um mês sem orçamento.
+// Todos os meses (ano/mês) posteriores ao mês atual que entram no forecast por orçamento — nunca
+// inventa dinheiro, mas também nunca pode "esconder" dinheiro que já é real.
+// Antes só entravam meses com pelo menos um orçamento cadastrado — um mês que ficasse fora do alcance
+// do "Replicar orçamento" (ex.: uma parcela de cartão de 12x caindo num mês distante, nunca replicado)
+// simplesmente desaparecia do forecast acumulado inteiro, escondendo um compromisso real do caixa sem
+// aviso nenhum. Agora também entram meses SEM orçamento nenhum mas que já têm dinheiro comprometido de
+// verdade — parcela de cartão já parcelada, ou um lançamento já registrado com data futura (ex.: um 13º
+// já lançado). calcularOrcadoRealizado já sabe tratar uma subcategoria sem orçamento (orçado = 0,
+// mostra o realizado do mesmo jeito) — só faltava garantir que o MÊS em si nunca fosse pulado inteiro.
 function mesesOrcamentoFuturo() {
   const hoje = new Date();
   const chaveHoje = hoje.getFullYear() + '-' + String(hoje.getMonth() + 1).padStart(2, '0');
   const set = new Set();
   STATE.orcamentos.forEach(o => {
     const chave = o.ano + '-' + String(o.mes).padStart(2, '0');
+    if (chave > chaveHoje) set.add(chave);
+  });
+  STATE.parcelas.forEach(p => {
+    if (p.ano == null || p.mes == null) return;
+    const chave = p.ano + '-' + String(p.mes).padStart(2, '0');
+    if (chave > chaveHoje) set.add(chave);
+  });
+  STATE.lancamentos.forEach(l => {
+    const chave = l.data.slice(0, 7);
     if (chave > chaveHoje) set.add(chave);
   });
   return Array.from(set).sort().map(chave => { const [y, m] = chave.split('-').map(Number); return { chave, ano: y, mes: m }; });
@@ -1754,12 +1770,17 @@ const Render = {
     // partir do saldo disponível de hoje, igual ao gráfico de cima, só que com orçamento no lugar do
     // cenário conservador.
     const mesesForecast = mesesOrcamentoFuturo();
+    // Meses que entraram na lista só por já terem parcela/lançamento comprometido (ver comentário em
+    // mesesOrcamentoFuturo), sem nenhum orçamento cadastrado neles — o rótulo "(orç.)" seria enganoso
+    // nesse caso, então esses meses ganham "(comprom.)" na barra, pra deixar claro que o número ali vem
+    // só do que já está lançado, não de um plano.
+    const mesesComOrcamento = new Set(STATE.orcamentos.map(o => o.ano + '-' + String(o.mes).padStart(2, '0')));
     let saldoAcumRunning = saldoDisponivel();
-    const forecastSerie = mesesForecast.map(({ ano: y, mes: m }) => {
+    const forecastSerie = mesesForecast.map(({ chave, ano: y, mes: m }) => {
       const { despesa, receita, candidatosCorte } = forecastMes(y, m);
       const saldoMes = AppLogic.reais(AppLogic.centavos(receita) - AppLogic.centavos(despesa));
       saldoAcumRunning = AppLogic.reais(AppLogic.centavos(saldoAcumRunning) + AppLogic.centavos(receita) - AppLogic.centavos(despesa));
-      return { y, m, despesa, receita, saldoMes, saldoAcumulado: saldoAcumRunning, candidatosCorte };
+      return { y, m, despesa, receita, saldoMes, saldoAcumulado: saldoAcumRunning, candidatosCorte, temOrcamento: mesesComOrcamento.has(chave) };
     });
     const forecastModo = this.forecastModo;
     const forecastValor = e => forecastModo === 'acumulado' ? e.saldoAcumulado : e.saldoMes;
@@ -1843,7 +1864,7 @@ const Render = {
       </div>
 
       <div class="section-title">Forecast por orçamento (se você seguir o orçamento à risca)</div>
-      <div class="logic-note"><span>ℹ️</span><div>Diferente do gráfico acima: aqui cada mês futuro assume o <b>valor orçado</b> onde ainda não há nada lançado, e usa o que já está comprometido (parcela de cartão, lançamento real) sempre que isso for maior que o orçado — nada já garantido é "apagado" pelo orçamento. Cobre todos os meses com orçamento cadastrado. Só é tão confiável quanto o seu orçamento estiver realista. <b>Mês a mês</b> isola cada mês (sem herdar nada do anterior); <b>Acumulado</b> encadeia a partir do saldo disponível de hoje.</div></div>
+      <div class="logic-note"><span>ℹ️</span><div>Diferente do gráfico acima: aqui cada mês futuro assume o <b>valor orçado</b> onde ainda não há nada lançado, e usa o que já está comprometido (parcela de cartão, lançamento real) sempre que isso for maior que o orçado — nada já garantido é "apagado" pelo orçamento. Cobre todos os meses com orçamento cadastrado <b>e também</b> meses sem orçamento nenhum mas que já têm parcela ou lançamento comprometido (marcados "comprom." na barra, em vez de "orç.") — assim nenhum compromisso real desaparece do gráfico só por faltar orçamento naquele mês. Só é tão confiável quanto o seu orçamento estiver realista. <b>Mês a mês</b> isola cada mês (sem herdar nada do anterior); <b>Acumulado</b> encadeia a partir do saldo disponível de hoje.</div></div>
       <div class="tabs" style="margin-bottom:10px;">
         <div class="tab ${forecastModo==='mesAmes'?'active':''}" onclick="Render.setForecastModo('mesAmes')">Mês a mês</div>
         <div class="tab ${forecastModo==='acumulado'?'active':''}" onclick="Render.setForecastModo('acumulado')">Acumulado</div>
@@ -1859,7 +1880,7 @@ const Render = {
               <div class="bar-zero-top">${isPos ? `<div class="bar-value">${fmtMoeda(v)}</div><div class="bar-d" style="height:${pct}%; background:var(--accent2); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div>` : ''}</div>
               <div class="bar-zero-axis"></div>
               <div class="bar-zero-bottom">${!isPos ? `<div class="bar-d" style="height:${pct}%; background:var(--amber); opacity:0.75; border:1px dashed rgba(255,255,255,0.3);"></div><div class="bar-value">${fmtMoeda(v)}</div>` : ''}</div>
-              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)} (orç.)</div>
+              <div class="bar-label">${String(e.m).padStart(2,'0')}/${String(e.y).slice(2)} ${e.temOrcamento ? '(orç.)' : '(comprom.)'}</div>
             </div>`;
           }).join('')}
         </div>
